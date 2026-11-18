@@ -446,6 +446,7 @@
     state.nup = [2, 3, 4, 5, 6, 8].includes(+settings.nup) ? +settings.nup : 2;
     state.gridSize = ['s', 'm', 'l'].includes(settings.gridSize) ? settings.gridSize : 'm';
     setSidebar(settings.sidebar !== false, false);
+    setIndexBar(settings.indexBar !== false, false);
     state.smooth = [0, 1, 2, 3, 4].includes(+settings.smooth) ? +settings.smooth : 2;
     state.defaultStars = [0, 1, 2, 3, 4, 5].includes(+settings.defaultStars) ? +settings.defaultStars : 3;
     $('smooth').value = String(state.smooth);
@@ -487,6 +488,19 @@
     if (save) saveSettings({ sidebar: show });
   }
   const sidebarShown = () => !document.querySelector('.app').classList.contains('no-sidebar');
+
+  // 인덱스 숨기기/보이기
+  function setIndexBar(show, save = true) {
+    document.querySelector('.app').classList.toggle('no-index', !show);
+    const b = $('index-btn');
+    b.setAttribute('aria-pressed', show);
+    b.setAttribute('aria-label', show ? '인덱스 숨기기 (I)' : '인덱스 보이기 (I)');
+    window.dispatchEvent(new Event('resize'));
+    if (show) centerStrip(state.focus);
+    if (save) saveSettings({ indexBar: show });
+  }
+  const indexShown = () => !document.querySelector('.app').classList.contains('no-index');
+  $('index-btn').addEventListener('click', () => setIndexBar(!indexShown()));
   $('sidebar-btn').addEventListener('click', () => setSidebar(!sidebarShown()));
 
   // ------------------------------------------------------------ 탐색기
@@ -1029,7 +1043,7 @@
     });
 
     $('index-title').textContent = state.folder
-      ? `${state.folderName} · ${state.photos.length}장${state.photos.length !== state.allPhotos.length ? ` (전체 ${state.allPhotos.length}장 중)` : ''}`
+      ? `${state.folderName} · ${state.photos.length !== state.allPhotos.length ? `${state.photos.length}/${state.allPhotos.length}장` : `${state.photos.length}장`}`
       : '';
     filterOptions();
     if (has && state.view === 'single') renderSingle(m);
@@ -1164,6 +1178,7 @@
     else if (ev.key === 'End') { ev.preventDefault(); setFocus(state.photos.length - 1); }
     else if (ev.key === 'Escape' && state.fs) { ev.preventDefault(); closeFs(); }
     else if ((ev.key === 'b' || ev.key === 'B' || ev.key === 'ㅠ') && !ev.ctrlKey && !state.fs) { ev.preventDefault(); setSidebar(!sidebarShown()); }
+    else if ((ev.key === 'i' || ev.key === 'I' || ev.key === 'ㅑ') && !ev.ctrlKey && !state.fs) { ev.preventDefault(); setIndexBar(!indexShown()); }
     else if (/^[0-5]$/.test(ev.key) && !ev.ctrlKey && !ev.altKey) {
       ev.preventDefault();
       if (state.photos.length) {
