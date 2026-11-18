@@ -25,6 +25,10 @@ button { cursor: pointer; }
 
 /* 상단 */
 .topbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 10px 20px; border-bottom: 1px solid var(--line); background: var(--bar); }
+.icon-btn { width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--line2); background: var(--field); color: var(--text2); display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.icon-btn:hover { background: #262A30; }
+.icon-btn[aria-pressed="false"] { color: var(--blue-t); border-color: #35507A; }
+.app.no-sidebar .sidebar { display: none; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; }
 .drive { display: flex; align-items: center; gap: 8px; padding: 4px 12px; border: 1px solid var(--line2); border-radius: 8px; background: var(--field); }
 .drive select { background: transparent; color: var(--text); border: 0; font-size: 13px; height: 28px; max-width: 280px; }
@@ -62,7 +66,9 @@ button { cursor: pointer; }
 .legend i { width: 10px; height: 10px; border-radius: 2px; }
 .lg-focus { border: 2px solid var(--blue); }
 .lg-mark { border: 2px solid var(--mark); }
-.strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; min-height: 88px; }
+.strip { position: relative; display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; min-height: 88px; user-select: none; }
+.strip img, .multi img { -webkit-user-drag: none; user-select: none; }
+.flinging, .flinging * { cursor: grabbing !important; }
 .ix { flex: none; width: 84px; padding: 0; border: 0; background: transparent; display: flex; flex-direction: column; gap: 4px; }
 .ix .th { display: block; position: relative; height: 60px; border-radius: 6px; overflow: hidden; border: 2px solid transparent; background: #0B0C0E; }
 .ix .th img { width: 100%; height: 100%; object-fit: contain; display: block; }
@@ -137,8 +143,9 @@ button { cursor: pointer; }
 .grid.gs-l { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
 
 /* 나란히 보기 */
-.multi { display: grid; gap: 12px; height: 100%; min-height: 360px; }
-.mcell { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+/* 나란히 보기: 모든 사진이 가로 한 줄로 이어지고, 화면에는 정한 장 수만큼 보인다 */
+.multi { --cw: 300px; position: relative; display: flex; gap: 12px; height: 100%; min-height: 360px; overflow-x: auto; overflow-y: hidden; padding-bottom: 6px; user-select: none; }
+.mcell { flex: 0 0 var(--cw); width: var(--cw); display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
 .mcell .mpic { position: relative; flex: 1; min-height: 120px; padding: 0; border-radius: 10px; overflow: hidden; background: #0B0C0E; border: 3px solid var(--line); cursor: pointer; }
 .mcell .mpic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
 .mcell .mpic .tag { position: absolute; left: 8px; top: 8px; padding: 1px 6px; border-radius: 4px; background: var(--bg); color: var(--text2); font-size: 11px; font-variant-numeric: tabular-nums; }
