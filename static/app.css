@@ -293,15 +293,19 @@ button { cursor: pointer; }
 .ip-links { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .ip-links .btn { height: 28px; padding: 0 10px; font-size: 12px; }
 
-/* ---------- 전체 화면: 화면 끝에 마우스를 대면 메뉴/속성 창이 나타남 ---------- */
-.app.fs-mode .sidebar, .app.fs-mode .infopanel {
-  display: flex !important; position: fixed; top: 0; bottom: 0; z-index: 30; height: 100vh;
+/* ---------- 화면 끝에 마우스를 대면 숨겨 둔 메뉴/속성 창이 나타남 ----------
+   사진 전체 화면(fs-mode)일 때, 또는 창 최대화(max-mode) 상태에서 메뉴/속성 창을 숨겨 두었을 때 */
+.app.fs-mode .sidebar, .app.max-mode.no-sidebar .sidebar,
+.app.fs-mode .infopanel, .app.max-mode.no-info .infopanel {
+  display: flex !important; position: fixed; top: var(--edge-top, 0px); bottom: 0; z-index: 30; height: auto;
   transition: transform .22s cubic-bezier(.25,1,.5,1), visibility 0s linear .22s; visibility: hidden;
   box-shadow: 0 0 24px rgba(0,0,0,.6);
 }
-.app.fs-mode .sidebar { left: 0; width: 300px; transform: translateX(-100%); }
-.app.fs-mode .infopanel { right: 0; width: 300px; display: block !important; transform: translateX(100%); }
-.app.fs-mode.reveal-left .sidebar, .app.fs-mode.reveal-right .infopanel {
+.app.fs-mode .sidebar, .app.fs-mode .infopanel { top: 0; }
+.app.fs-mode .sidebar, .app.max-mode.no-sidebar .sidebar { left: 0; width: 300px; transform: translateX(-100%); }
+.app.fs-mode .infopanel, .app.max-mode.no-info .infopanel { right: 0; width: 300px; display: block !important; transform: translateX(100%); }
+.app.fs-mode.reveal-left .sidebar, .app.max-mode.no-sidebar.reveal-left .sidebar,
+.app.fs-mode.reveal-right .infopanel, .app.max-mode.no-info.reveal-right .infopanel {
   transform: none; visibility: visible; transition: transform .22s cubic-bezier(.25,1,.5,1), visibility 0s;
 }
 .fs-edge { position: fixed; top: 0; bottom: 0; width: 6px; z-index: 25; }

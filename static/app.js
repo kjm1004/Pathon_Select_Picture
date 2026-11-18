@@ -483,6 +483,7 @@
 
   // ------------------------------------------------------------ 좌측 메뉴 숨기기/보이기
   function setSidebar(show, save = true) {
+    document.querySelector('.app').classList.remove('reveal-left');
     document.querySelector('.app').classList.toggle('no-sidebar', !show);
     const b = $('sidebar-btn');
     b.setAttribute('aria-pressed', show);
@@ -519,8 +520,12 @@
   // ------------------------------------------------------------ 사진 속성 창
   const appEl = document.querySelector('.app');
   // 평소에는 [속성] 상태, 전체 화면에서는 오른쪽 끝에서 꺼냈을 때
-  const infoShown = () => (appEl.classList.contains('fs-mode') ? appEl.classList.contains('reveal-right') : !appEl.classList.contains('no-info'));
+  // 속성 창이 "화면 끝에서 꺼내는" 방식인지 (사진 전체 화면, 또는 창 최대화 + 속성 창 숨김)
+  const infoOverlay = () => appEl.classList.contains('fs-mode') || (appEl.classList.contains('max-mode') && appEl.classList.contains('no-info'));
+  const menuOverlay = () => appEl.classList.contains('fs-mode') || (appEl.classList.contains('max-mode') && appEl.classList.contains('no-sidebar'));
+  const infoShown = () => (infoOverlay() ? appEl.classList.contains('reveal-right') : !appEl.classList.contains('no-info'));
   function setInfoPanel(show, save = true) {
+    appEl.classList.remove('reveal-right');
     appEl.classList.toggle('no-info', !show);
     $('info-btn').setAttribute('aria-pressed', show);
     window.dispatchEvent(new Event('resize'));
@@ -528,7 +533,7 @@
     if (save) saveSettings({ infoPanel: show });
   }
   $('info-btn').addEventListener('click', () => setInfoPanel(!infoShown()));
-  $('ip-close').addEventListener('click', () => (appEl.classList.contains('fs-mode') ? appEl.classList.remove('reveal-right') : setInfoPanel(false)));
+  $('ip-close').addEventListener('click', () => (infoOverlay() ? appEl.classList.remove('reveal-right') : setInfoPanel(false)));
 
   let ipFor, ipTimer = null;
   const histCache = new Map();
@@ -1202,17 +1207,35 @@
     }
   }
   document.addEventListener('mousemove', (e) => {
-    if (!state.fs) return;
-    const x = e.clientX, w = window.innerWidth;
-    const leftW = document.querySelector('.sidebar').offsetWidth || 300;
-    const rightW = $('infopanel').offsetWidth || 300;
-    if (x <= EDGE) reveal('left', true);
-    else if (appEl.classList.contains('reveal-left')) reveal('left', x <= leftW + 16);
-    if (x >= w - 1 - EDGE) reveal('right', true);
-    else if (appEl.classList.contains('reveal-right')) reveal('right', x >= w - rightW - 16);
+    if (!$('dialog').hidden || !$('settings').hidden) return;
+    const x = e.clientX, y = e.clientY, w = window.innerWidth;
+    // 창 최대화 상태에서는 상단 바 아래쪽 가장자리만 (맨 위 버튼을 가리지 않게)
+    const top = state.fs ? 0 : edgeTop();
+    if (menuOverlay()) {
+      const leftW = document.querySelector('.sidebar').offsetWidth || 300;
+      if (x <= EDGE && y >= top) reveal('left', true);
+      else if (appEl.classList.contains('reveal-left')) reveal('left', x <= leftW + 16 && y >= top - 8);
+    }
+    if (infoOverlay()) {
+      const rightW = $('infopanel').offsetWidth || 300;
+      if (x >= w - 1 - EDGE && y >= top) reveal('right', true);
+      else if (appEl.classList.contains('reveal-right')) reveal('right', x >= w - rightW - 16 && y >= top - 8);
+    }
   }, { passive: true });
   // 마우스가 창 밖으로 나가면 닫기
-  document.addEventListener('mouseleave', () => { if (state.fs) { reveal('left', false); reveal('right', false); } });
+  document.addEventListener('mouseleave', () => { reveal('left', false); reveal('right', false); });
+
+  // 창이 최대화(또는 전체 화면)되었는지: 화면 작업 영역을 거의 다 차지하면 최대화로 본다
+  const edgeTop = () => Math.round(document.querySelector('.topbar').getBoundingClientRect().bottom);
+  function updateMaxMode() {
+    const max = !!document.fullscreenElement
+      || (screen.availWidth - window.outerWidth <= 16 && screen.availHeight - window.outerHeight <= 16);
+    appEl.classList.toggle('max-mode', max);
+    appEl.style.setProperty('--edge-top', `${edgeTop()}px`);
+    if (!max && !state.fs) appEl.classList.remove('reveal-left', 'reveal-right');
+  }
+  window.addEventListener('resize', updateMaxMode);
+  updateMaxMode();
 
   // ------------------------------------------------------------ 그리기
   function markedPhotos() {
