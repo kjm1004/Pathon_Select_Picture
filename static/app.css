@@ -29,7 +29,7 @@ button { cursor: pointer; }
 .drive { display: flex; align-items: center; gap: 8px; padding: 4px 12px; border: 1px solid var(--line2); border-radius: 8px; background: var(--field); }
 .drive select { background: transparent; color: var(--text); border: 0; font-size: 13px; height: 28px; max-width: 280px; }
 .drive select option { background: var(--field); }
-.path-label { max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.path-label { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 
 .body { flex: 1; min-height: 0; display: flex; flex-wrap: wrap; overflow: auto; }
 
@@ -64,7 +64,7 @@ button { cursor: pointer; }
 .strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; min-height: 88px; }
 .ix { flex: none; width: 84px; padding: 0; border: 0; background: transparent; display: flex; flex-direction: column; gap: 4px; }
 .ix .th { display: block; position: relative; height: 60px; border-radius: 6px; overflow: hidden; border: 2px solid transparent; background: #0B0C0E; }
-.ix .th img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ix .th img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .ix .num { font-size: 11px; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
 .ix .x { position: absolute; right: 3px; top: 3px; width: 18px; height: 18px; border-radius: 4px; background: var(--mark); display: none; align-items: center; justify-content: center; }
 .ix.marked .th { border-color: var(--mark); }
@@ -93,11 +93,15 @@ button { cursor: pointer; }
 .nav-btn { flex: none; width: 44px; height: 44px; border-radius: 22px; border: 1px solid var(--line2); background: var(--field); display: flex; align-items: center; justify-content: center; }
 .nav-btn:disabled { opacity: .35; cursor: default; }
 .frame-wrap { flex: 1; min-width: 0; align-self: stretch; position: relative; }
-.big { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; cursor: pointer; }
-.big img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 10px; border: 3px solid var(--line); background: #000; display: block; }
+.opt { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.opt select { height: 34px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--line2); background: var(--field); color: var(--text); font-size: 13px; }
+.btn-sm { height: 34px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; }
+.big { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; border-radius: 10px; border: 3px solid var(--line); background: #0B0C0E; overflow: hidden; cursor: zoom-in; }
+.big img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
 .noprev { width: 480px; max-width: 100%; aspect-ratio: 4/3; border-radius: 10px; border: 3px solid var(--line); background: #22262B; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 15px; text-align: center; padding: 16px; }
 .mark-pill { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 999px; background: var(--mark); color: var(--mark-ink); font-weight: 700; font-size: 15px; pointer-events: none; white-space: nowrap; }
-.big.marked img, .big.marked .noprev { border-color: var(--mark); opacity: .4; }
+.big.marked { border-color: var(--mark); }
+.big.marked img, .big.marked .noprev { opacity: .4; }
 .big.marked .mark-pill { display: flex; }
 .info { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
 .info-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -109,7 +113,7 @@ button { cursor: pointer; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
 .cell { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .cell .pic { position: relative; display: block; width: 100%; aspect-ratio: 4/3; padding: 0; border-radius: 8px; overflow: hidden; background: #0B0C0E; border: 2px solid var(--line); }
-.cell .pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cell .pic img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .cell .tag { position: absolute; left: 6px; top: 6px; padding: 1px 6px; border-radius: 4px; background: var(--bg); color: var(--text2); font-size: 11px; font-variant-numeric: tabular-nums; }
 .cell .del { position: absolute; right: 6px; top: 6px; display: none; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px; background: var(--mark); color: var(--mark-ink); font-size: 11px; font-weight: 700; }
 .cell.focus .pic { border-color: var(--blue); }
@@ -120,6 +124,39 @@ button { cursor: pointer; }
 .cell .row input { width: 16px; height: 16px; margin: 0; accent-color: var(--mark); }
 .cell .row label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .cell .sub { color: var(--muted); font-size: 12px; }
+
+.grid.gs-s { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+.grid.gs-l { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+
+/* 나란히 보기 */
+.multi { display: grid; gap: 12px; height: 100%; min-height: 360px; }
+.mcell { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+.mcell .mpic { position: relative; flex: 1; min-height: 120px; padding: 0; border-radius: 10px; overflow: hidden; background: #0B0C0E; border: 3px solid var(--line); cursor: pointer; }
+.mcell .mpic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.mcell .mpic .tag { position: absolute; left: 8px; top: 8px; padding: 1px 6px; border-radius: 4px; background: var(--bg); color: var(--text2); font-size: 11px; font-variant-numeric: tabular-nums; }
+.mcell .mpic .del { position: absolute; right: 8px; top: 8px; display: none; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px; background: var(--mark); color: var(--mark-ink); font-size: 11px; font-weight: 700; }
+.mcell.focus .mpic { border-color: var(--blue); }
+.mcell.marked .mpic { border-color: var(--mark); }
+.mcell.marked img, .mcell.marked .ext { opacity: .4; }
+.mcell.marked .del { display: flex; }
+.mcell .mrow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mcell .mrow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcell .mrow .sub { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.mcell .mtoggle { height: 32px; padding: 0 10px; border-radius: 6px; font-size: 12px; font-weight: 700; border: 1px solid #7A3A2C; background: #3A1F19; color: var(--mark-t); white-space: nowrap; }
+.mcell.marked .mtoggle { border-color: var(--line2); background: #24282D; color: var(--text); }
+
+/* 전체 화면 */
+.fs { position: fixed; inset: 0; background: #000; z-index: 20; }
+.fs-stage { position: absolute; inset: 0 0 64px 0; display: flex; align-items: center; justify-content: center; }
+.fs-stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.fs-stage.marked img, .fs-stage.marked .noprev { opacity: .4; }
+.fs-stage.marked .mark-pill { display: flex; }
+.fs-stage.marked { box-shadow: inset 0 0 0 4px var(--mark); }
+.fs-nav { position: absolute; top: calc(50% - 54px); width: 52px; height: 52px; border-radius: 26px; background: rgba(30,33,37,.8); }
+.fs-left { left: 16px; } .fs-right { right: 16px; }
+.fs-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 64px; display: flex; align-items: center; gap: 14px; padding: 0 16px; background: #111316; border-top: 1px solid var(--line); }
+.fs-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.fs .toggle-btn { height: 40px; }
 
 /* 하단 */
 .actionbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--bar); }

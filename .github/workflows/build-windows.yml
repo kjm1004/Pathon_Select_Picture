@@ -1,0 +1,36 @@
+name: Windows 실행 파일 빌드
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 패키지 설치
+        run: python -m pip install -r requirements.txt pyinstaller pytest
+      - name: 테스트
+        run: python -m pytest -q
+      - name: exe 만들기
+        run: pyinstaller --noconfirm --clean --windowed --name PhotoSelect --add-data "static;static" app.py
+      - name: 압축
+        run: Compress-Archive -Path dist/PhotoSelect -DestinationPath PhotoSelect-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhotoSelect-windows
+          path: PhotoSelect-windows.zip
+      - name: 릴리스에 첨부 (v로 시작하는 태그일 때)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: PhotoSelect-windows.zip

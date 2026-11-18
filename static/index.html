@@ -20,7 +20,10 @@
       <select id="root-select"></select>
       <span id="disk-usage" class="muted"></span>
     </label>
-    <span class="spacer"></span>
+    <button id="open-folder" class="btn btn-sm">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      폴더 열기
+    </button>
     <span id="path-label" class="muted path-label"></span>
   </header>
 
@@ -50,11 +53,29 @@
 
       <div class="toolbar">
         <div class="seg" role="group" aria-label="보기 방식">
-          <button id="view-single" aria-pressed="true">한 장 보기</button>
-          <button id="view-grid" aria-pressed="false">바둑판 보기</button>
+          <button id="view-single" data-view="single" aria-pressed="true">한 장</button>
+          <button id="view-multi" data-view="multi" aria-pressed="false">나란히</button>
+          <button id="view-grid" data-view="grid" aria-pressed="false">바둑판</button>
         </div>
+        <label id="nup-wrap" class="opt" hidden>
+          <span>장 수</span>
+          <select id="nup">
+            <option value="2">2장</option><option value="3">3장</option><option value="4">4장</option>
+            <option value="5">5장</option><option value="6">6장</option><option value="8">8장</option>
+          </select>
+        </label>
+        <label id="gsize-wrap" class="opt" hidden>
+          <span>크기</span>
+          <select id="gsize">
+            <option value="s">작게</option><option value="m">보통</option><option value="l">크게</option>
+          </select>
+        </label>
+        <button id="fs-btn" class="btn btn-sm" title="전체 화면 (F)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+          전체 화면
+        </button>
         <span class="spacer"></span>
-        <span class="muted hint">← → 이동 · Space 삭제 표시</span>
+        <span class="muted hint">← → 이동 · Space 삭제 표시 · F 전체 화면</span>
         <span id="pos" class="muted tabnum"></span>
       </div>
 
@@ -89,6 +110,8 @@
           </div>
         </div>
 
+        <div id="multi" class="multi" hidden></div>
+
         <div id="grid" class="grid" hidden></div>
       </div>
 
@@ -115,6 +138,26 @@
         <button id="dlg-cancel" class="btn">취소</button>
         <button id="dlg-ok" class="btn-danger">휴지통으로 이동</button>
       </div>
+    </div>
+  </div>
+
+  <div id="fs" class="fs" role="dialog" aria-modal="true" aria-label="전체 화면 보기" hidden>
+    <div id="fs-stage" class="fs-stage">
+      <img id="fs-img" alt="">
+      <div id="fs-noprev" class="noprev" hidden></div>
+      <div class="mark-pill" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1A0E0A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>
+        삭제 표시됨
+      </div>
+    </div>
+    <button id="fs-prev" class="nav-btn fs-nav fs-left" aria-label="이전 사진"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#E6E8EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+    <button id="fs-next" class="nav-btn fs-nav fs-right" aria-label="다음 사진"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#E6E8EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
+    <div class="fs-bar">
+      <span id="fs-pos" class="tabnum"></span>
+      <span id="fs-name" class="fs-name"></span>
+      <span class="spacer"></span>
+      <button id="fs-toggle" class="toggle-btn">삭제 표시</button>
+      <button id="fs-close" class="btn">닫기 (Esc)</button>
     </div>
   </div>
 

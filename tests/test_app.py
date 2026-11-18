@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("PHOTO_CLEANER_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("PHOTO_CLEANER_CACHE", str(tmp_path / "cache"))
     import app as appmod
 
@@ -76,3 +77,28 @@ def test_permanent_delete(client):
     f = str(client.day / "IMG_2.JPG")
     r = client.post("/api/delete", json={"paths": [f], "permanent": True}, headers={"X-Token": client.mod.TOKEN}).get_json()
     assert len(r["deleted"]) == 1 and not Path(f).exists() and client.trashed == []
+
+
+def test_settings_roundtrip(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(client.mod, "SETTINGS_FILE", tmp_path / "settings.json")
+    client.mod.app.config["START_ROOT"] = None
+    s = client.get("/api/settings").get_json()
+    assert s["view"] == "single" and s["folder"] is None
+    assert client.post("/api/settings", json={"view": "multi"}).status_code == 403  # 토큰 필요
+    r = client.post(
+        "/api/settings",
+        json={"root": str(client.root), "folder": str(client.day), "view": "multi", "nup": 4, "evil": 1},
+        headers={"X-Token": client.mod.TOKEN},
+    ).get_json()
+    assert r["nup"] == 4 and "evil" not in r
+    again = client.get("/api/settings").get_json()
+    assert again["folder"] == str(client.day) and again["view"] == "multi"
+    # 마지막 드라이브/폴더가 시작 위치가 된다
+    assert client.get("/api/roots").get_json()["start"] == str(client.root)
+
+
+def test_start_root_overrides_saved_folder(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(client.mod, "SETTINGS_FILE", tmp_path / "settings.json")
+    client.mod.save_settings({"root": "/elsewhere", "folder": "/elsewhere/x"})
+    s = client.get("/api/settings").get_json()
+    assert s["root"] == str(client.root) and s["folder"] is None

@@ -8,16 +8,20 @@
   const state = {
     root: null,            // 탐색기 최상위 경로
     nodes: new Map(),      // path -> {name, path, count, hasChildren, children:[path]|null, open, loading}
-    rootChildren: [],      // 최상위 바로 아래 폴더 경로들
+    rootChildren: [],
     q: '',
-    folder: null,          // 현재 열린 폴더 경로
-    photos: [],            // 현재 폴더 사진 [{name, path, size, mtime, viewable}]
+    folder: null,          // 현재 열린 폴더
+    photos: [],            // [{name, path, size, mtime, viewable}]
     focus: 0,
-    view: 'single',
+    view: 'single',        // single | multi | grid
+    nup: 2,                // 나란히 보기 장 수
+    gridSize: 'm',
+    fs: false,             // 전체 화면 보기
     marks: new Map(),      // folderPath -> Set(photoPath)
-    info: new Map(),       // photoPath -> info
+    info: new Map(),
     stripEls: [],
     gridEls: [],
+    settings: {},
   };
 
   // ------------------------------------------------------------ 유틸
@@ -31,12 +35,27 @@
   const num3 = (i) => String(i + 1).padStart(3, '0');
   const thumbUrl = (p, size) => `/api/thumb?size=${size}&path=${encodeURIComponent(p)}`;
   const extOf = (name) => (name.split('.').pop() || '').toUpperCase();
+  const isUnder = (target, dir) => target === dir || (target.startsWith(dir) && /[\\/]/.test(dir.slice(-1) + target.charAt(dir.length)));
+  const baseName = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
 
   async function api(path, opts = {}) {
     const res = await fetch(path, opts);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `요청 실패 (${res.status})`);
     return data;
+  }
+  const post = (path, body) => api(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Token': TOKEN },
+    body: JSON.stringify(body),
+  });
+
+  // 설정 저장(마지막 작업 폴더 등) — 너무 자주 쓰지 않도록 묶어서 저장
+  let saveTimer = null; let pending = {};
+  function saveSettings(changes) {
+    Object.assign(pending, changes);
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { const c = pending; pending = {}; post('/api/settings', c).catch(() => {}); }, 400);
   }
 
   let toastTimer = null;
@@ -54,16 +73,46 @@
     return state.marks.get(folder);
   };
 
-  // ------------------------------------------------------------ 드라이브 / 탐색기
-  async function loadRoots() {
-    const data = await api('/api/roots');
-    const sel = $('root-select');
-    sel.innerHTML = data.roots.map((r) => `<option value="${esc(r.path)}">${esc(r.name)}</option>`).join('');
-    const start = data.start || (data.roots[0] && data.roots[0].path);
-    if (start) { sel.value = start; await setRoot(start); }
+  // 별도 프로그램(pywebview) 창에서 실행 중인지
+  const desktop = () => !!(window.pywebview && window.pywebview.api);
+
+  // ------------------------------------------------------------ 시작
+  async function init() {
+    const [roots, settings] = await Promise.all([api('/api/roots'), api('/api/settings')]);
+    state.settings = settings;
+    state.view = ['single', 'multi', 'grid'].includes(settings.view) ? settings.view : 'single';
+    state.nup = [2, 3, 4, 5, 6, 8].includes(+settings.nup) ? +settings.nup : 2;
+    state.gridSize = ['s', 'm', 'l'].includes(settings.gridSize) ? settings.gridSize : 'm';
+    $('nup').value = String(state.nup);
+    $('gsize').value = state.gridSize;
+    applyViewButtons();
+
+    fillRoots(roots.roots);
+    const start = roots.start || (roots.roots[0] && roots.roots[0].path);
+    if (start) {
+      $('root-select').value = start;
+      const restore = settings.root === start ? settings : {};
+      await setRoot(start, restore.folder, restore.photo);
+    }
   }
 
-  async function setRoot(path) {
+  function fillRoots(list) {
+    const sel = $('root-select');
+    sel.innerHTML = list.map((r) => `<option value="${esc(r.path)}">${esc(r.name)}</option>`).join('');
+  }
+
+  function addRootOption(path) {
+    const sel = $('root-select');
+    if (![...sel.options].some((o) => o.value === path)) {
+      const o = document.createElement('option');
+      o.value = path; o.textContent = path;
+      sel.insertBefore(o, sel.firstChild);
+    }
+    sel.value = path;
+  }
+
+  // ------------------------------------------------------------ 탐색기
+  async function setRoot(path, restoreFolder, restorePhoto) {
     state.root = path;
     state.nodes.clear();
     state.rootChildren = [];
@@ -73,11 +122,36 @@
       state.rootChildren = addNodes(data.dirs);
       $('disk-usage').textContent = data.disk ? `${fmtSize(data.disk.used)} 사용 / ${fmtSize(data.disk.total)}` : '';
       renderTree();
-      // 최상위 폴더 자체에 사진이 있으면 바로 연다
-      openFolder(path, true);
     } catch (e) {
       $('tree').innerHTML = `<div class="tree-msg">${esc(e.message)}</div>`;
+      return;
     }
+    saveSettings({ root: path });
+    if (restoreFolder && isUnder(restoreFolder, path)) {
+      const ok = await revealFolder(restoreFolder);
+      if (ok) { await openFolder(restoreFolder, false, restorePhoto); return; }
+    }
+    await openFolder(path, true);
+  }
+
+  // 마지막 작업 폴더까지 트리를 차례로 펼친다
+  async function revealFolder(target) {
+    if (target === state.root) return true;
+    let level = state.rootChildren;
+    for (let guard = 0; guard < 64; guard++) {
+      const hit = level.find((p) => isUnder(target, p));
+      if (!hit) return false;
+      if (hit === target) {
+        renderTree();
+        const el = [...document.querySelectorAll('.node')].find((n) => n.dataset.path === target);
+        if (el) el.scrollIntoView({ block: 'center' });
+        return true;
+      }
+      const node = state.nodes.get(hit);
+      await expand(node);
+      level = node.children || [];
+    }
+    return false;
   }
 
   function addNodes(dirs) {
@@ -104,7 +178,6 @@
     renderTree();
   }
 
-  // 검색어에 맞는 폴더(또는 맞는 하위 폴더를 가진 폴더)만 보여 준다. 이미 펼쳐 본 폴더 안에서 찾는다.
   function matches(path) {
     const n = state.nodes.get(path);
     if (!state.q) return true;
@@ -148,14 +221,32 @@
   });
 
   $('folder-search').addEventListener('input', (e) => { state.q = e.target.value.trim().toLowerCase(); renderTree(); });
-  $('root-select').addEventListener('change', (e) => setRoot(e.target.value));
+  $('root-select').addEventListener('change', (e) => { e.target.blur(); setRoot(e.target.value); });
+
+  $('open-folder').addEventListener('click', async () => {
+    let path = null;
+    if (desktop()) {
+      try { path = await window.pywebview.api.pick_folder(); } catch (e) { toast(String(e), true); }
+    } else {
+      path = window.prompt('열 사진 폴더 경로를 입력하세요 (예: E:\\사진)', state.root || '');
+    }
+    if (!path) return;
+    path = path.trim();
+    addRootOption(path);
+    setRoot(path);
+  });
 
   // ------------------------------------------------------------ 폴더 열기
-  async function openFolder(path, quiet = false) {
+  async function openFolder(path, quiet = false, focusName = null) {
     try {
       const data = await api('/api/photos?path=' + encodeURIComponent(path));
       if (quiet && data.photos.length === 0) { showFolder(null, []); return; }
       showFolder(path, data.photos);
+      if (focusName) {
+        const i = data.photos.findIndex((p) => p.name === focusName);
+        if (i > 0) setFocus(i);
+      }
+      saveSettings({ root: state.root, folder: path, photo: state.photos[state.focus] ? state.photos[state.focus].name : null });
     } catch (e) {
       toast(e.message, true);
     }
@@ -165,8 +256,9 @@
     state.folder = path;
     state.photos = photos;
     state.focus = 0;
+    multiKey = null;
     const n = path && state.nodes.get(path);
-    const name = n ? n.name : path ? path.split(/[\\/]/).filter(Boolean).pop() || path : '';
+    const name = n ? n.name : path ? baseName(path) : '';
     $('path-label').textContent = path || '';
     $('path-label').title = path || '';
     $('index-title').textContent = path ? `${name} · ${photos.length}장` : '';
@@ -193,7 +285,7 @@
     const grid = $('grid');
     grid.innerHTML = state.photos.map((p, i) => `
       <div class="cell" data-i="${i}">
-        <button class="pic" data-i="${i}" aria-label="${esc(p.name)} 삭제 표시 전환">
+        <button class="pic" data-i="${i}" aria-label="${esc(p.name)} 삭제 표시 전환 (더블클릭: 전체 화면)">
           ${p.viewable ? `<img loading="lazy" src="${thumbUrl(p.path, 'm')}" alt="">` : `<span class="ext">${esc(extOf(p.name))}</span>`}
           <span class="tag">${num3(i)}</span>
           <span class="del"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#1A0E0A" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>삭제</span>
@@ -208,12 +300,84 @@
     const b = ev.target.closest('.ix');
     if (b) setFocus(+b.dataset.i);
   });
+  $('strip').addEventListener('dblclick', (ev) => {
+    const b = ev.target.closest('.ix');
+    if (b) { setFocus(+b.dataset.i); openFs(); }
+  });
+
+  // 클릭 = 삭제 표시 전환, 더블클릭 = 전체 화면 (더블클릭 때는 표시를 바꾸지 않도록 잠깐 기다린다)
+  let clickTimer = null;
+  function clickOrDbl(i) {
+    if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; setFocus(i, false); openFs(); return; }
+    clickTimer = setTimeout(() => { clickTimer = null; setFocus(i, false); toggleMark(i); }, 230);
+  }
   $('grid').addEventListener('click', (ev) => {
     const pic = ev.target.closest('.pic');
-    if (pic) { const i = +pic.dataset.i; setFocus(i, false); toggleMark(i); }
+    if (pic) clickOrDbl(+pic.dataset.i);
   });
   $('grid').addEventListener('change', (ev) => {
     if (ev.target.matches('input[type=checkbox]')) { const i = +ev.target.dataset.i; setFocus(i, false); toggleMark(i); }
+  });
+
+  // ------------------------------------------------------------ 나란히 보기
+  let multiKey = null;
+  function multiRange() {
+    const n = Math.min(state.nup, state.photos.length);
+    // 현재 사진이 화면 안에 들어오도록 시작 위치를 정한다
+    let start = multiStart;
+    if (state.focus < start) start = state.focus;
+    if (state.focus >= start + n) start = state.focus - n + 1;
+    start = Math.max(0, Math.min(start, state.photos.length - n));
+    multiStart = start;
+    return { start, n };
+  }
+  let multiStart = 0;
+
+  function renderMulti(m) {
+    const box = $('multi');
+    const { start, n } = multiRange();
+    const cols = n <= 4 ? n : Math.ceil(n / 2);
+    const rows = n <= 4 ? 1 : 2;
+    const key = `${state.folder}|${start}|${n}`;
+    if (key !== multiKey) {
+      multiKey = key;
+      box.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+      box.style.gridTemplateRows = `repeat(${rows}, minmax(0, 1fr))`;
+      const items = state.photos.slice(start, start + n);
+      box.innerHTML = items.map((p, k) => {
+        const i = start + k;
+        return `<div class="mcell" data-i="${i}">
+          <button class="mpic" data-i="${i}" aria-label="${esc(p.name)} (클릭: 선택, 더블클릭: 전체 화면)">
+            ${p.viewable ? `<img src="${thumbUrl(p.path, 'l')}" alt="">` : `<span class="ext">${esc(extOf(p.name))}</span>`}
+            <span class="tag">${num3(i)}</span>
+            <span class="del"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#1A0E0A" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>삭제</span>
+          </button>
+          <div class="mrow">
+            <span class="nm" title="${esc(p.name)}">${esc(p.name)}</span>
+            <span class="sub">${fmtSize(p.size)}</span>
+            <button class="mtoggle" data-i="${i}"></button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+    [...box.children].forEach((c) => {
+      const i = +c.dataset.i;
+      const mk = m.has(state.photos[i].path);
+      c.classList.toggle('marked', mk);
+      c.classList.toggle('focus', i === state.focus);
+      c.querySelector('.mtoggle').textContent = mk ? '표시 해제' : '삭제 표시';
+    });
+  }
+
+  $('multi').addEventListener('click', (ev) => {
+    const t = ev.target.closest('.mtoggle');
+    if (t) { const i = +t.dataset.i; setFocus(i, false); toggleMark(i); return; }
+    const pic = ev.target.closest('.mpic');
+    if (pic) setFocus(+pic.dataset.i, false);
+  });
+  $('multi').addEventListener('dblclick', (ev) => {
+    const pic = ev.target.closest('.mpic');
+    if (pic) { setFocus(+pic.dataset.i, false); openFs(); }
   });
 
   // ------------------------------------------------------------ 상태 변경
@@ -221,6 +385,8 @@
     if (!state.photos.length) return;
     state.focus = Math.max(0, Math.min(state.photos.length - 1, i));
     renderAll();
+    const p = state.photos[state.focus];
+    if (p) saveSettings({ photo: p.name });
     if (scroll) {
       const s = state.stripEls[state.focus];
       if (s) s.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
@@ -240,19 +406,29 @@
     renderTree();
   }
 
+  function applyViewButtons() {
+    document.querySelectorAll('.seg [data-view]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.view === state.view));
+    $('nup-wrap').hidden = state.view !== 'multi';
+    $('gsize-wrap').hidden = state.view !== 'grid';
+    $('grid').className = `grid gs-${state.gridSize}`;
+  }
+
   function setView(v) {
     state.view = v;
-    $('view-single').setAttribute('aria-pressed', v === 'single');
-    $('view-grid').setAttribute('aria-pressed', v === 'grid');
+    applyViewButtons();
     renderAll();
+    saveSettings({ view: v });
     if (v === 'grid') { const g = state.gridEls[state.focus]; if (g) g.scrollIntoView({ block: 'nearest' }); }
   }
-  $('view-single').addEventListener('click', () => setView('single'));
-  $('view-grid').addEventListener('click', () => setView('grid'));
+  document.querySelectorAll('.seg [data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+  $('nup').addEventListener('change', (e) => { e.target.blur(); state.nup = +e.target.value; multiKey = null; renderAll(); saveSettings({ nup: state.nup }); });
+  $('gsize').addEventListener('change', (e) => { e.target.blur(); state.gridSize = e.target.value; applyViewButtons(); saveSettings({ gridSize: state.gridSize }); });
+
   $('prev').addEventListener('click', () => setFocus(state.focus - 1));
   $('next').addEventListener('click', () => setFocus(state.focus + 1));
   $('toggle-btn').addEventListener('click', () => toggleMark(state.focus));
-  $('big').addEventListener('click', () => toggleMark(state.focus));
+  $('big').addEventListener('click', () => openFs());
+  $('fs-btn').addEventListener('click', () => openFs());
 
   $('mark-all').addEventListener('click', () => {
     if (!state.folder) return;
@@ -265,6 +441,70 @@
     marksOf(state.folder).clear();
     renderAll(); renderTree();
   });
+
+  // ------------------------------------------------------------ 전체 화면
+  function openFs() {
+    if (!state.photos.length) return;
+    state.fs = true;
+    fsFor = null;
+    $('fs').hidden = false;
+    if (desktop()) window.pywebview.api.set_fullscreen(true).catch(() => {});
+    else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
+    renderAll();
+    $('fs-close').focus();
+  }
+  function closeFs() {
+    state.fs = false;
+    $('fs').hidden = true;
+    if (desktop()) window.pywebview.api.set_fullscreen(false).catch(() => {});
+    else if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    renderAll();
+    const s = state.stripEls[state.focus];
+    if (s) s.scrollIntoView({ block: 'nearest', inline: 'center' });
+  }
+  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && state.fs && !desktop()) closeFs(); });
+  $('fs-close').addEventListener('click', closeFs);
+  $('fs-prev').addEventListener('click', () => setFocus(state.focus - 1));
+  $('fs-next').addEventListener('click', () => setFocus(state.focus + 1));
+  $('fs-toggle').addEventListener('click', () => toggleMark(state.focus));
+  $('fs-stage').addEventListener('dblclick', closeFs);
+
+  let fsFor = null;
+  function renderFs(m) {
+    const p = state.photos[state.focus];
+    if (!p) { closeFs(); return; }
+    const mk = m.has(p.path);
+    $('fs-stage').classList.toggle('marked', mk);
+    if (fsFor !== p.path) {
+      fsFor = p.path;
+      showImage($('fs-img'), $('fs-noprev'), p, 'x');
+      const nx = state.photos[state.focus + 1];
+      if (nx && nx.viewable) { const pre = new Image(); pre.src = thumbUrl(nx.path, 'x'); }
+    }
+    $('fs-pos').textContent = `${state.focus + 1} / ${state.photos.length}`;
+    $('fs-name').textContent = p.name;
+    $('fs-toggle').textContent = mk ? '삭제 표시 해제' : '삭제 표시';
+    $('fs-toggle').classList.toggle('on', mk);
+    $('fs-prev').disabled = state.focus === 0;
+    $('fs-next').disabled = state.focus >= state.photos.length - 1;
+  }
+
+  // 큰 사진: 먼저 작은 썸네일을 보여 주고 큰 사진이 오면 바꾼다
+  function showImage(img, noprev, p, size) {
+    if (p.viewable) {
+      img.hidden = false; noprev.hidden = true;
+      img.alt = p.name;
+      img.src = thumbUrl(p.path, 'm');
+      const big = new Image();
+      big.onload = () => { if (img.dataset.want === p.path) img.src = big.src; };
+      img.dataset.want = p.path;
+      big.src = thumbUrl(p.path, size);
+    } else {
+      img.hidden = true; noprev.hidden = false;
+      img.removeAttribute('src');
+      noprev.textContent = `${extOf(p.name)} 파일은 미리보기를 지원하지 않습니다`;
+    }
+  }
 
   // ------------------------------------------------------------ 그리기
   function markedPhotos() {
@@ -279,8 +519,10 @@
     $('empty').hidden = has;
     $('empty').querySelector('.empty-title').textContent = state.folder ? '이 폴더에는 사진이 없습니다' : '왼쪽에서 사진 폴더를 선택하세요';
     $('single').hidden = !has || state.view !== 'single';
+    $('multi').hidden = !has || state.view !== 'multi';
     $('grid').hidden = !has || state.view !== 'grid';
-    $('pos').textContent = has && state.view === 'single' ? `${state.focus + 1} / ${state.photos.length}` : '';
+    $('fs-btn').disabled = !has;
+    $('pos').textContent = has && state.view !== 'grid' ? `${state.focus + 1} / ${state.photos.length}` : '';
 
     state.photos.forEach((p, i) => {
       const mk = m.has(p.path);
@@ -295,7 +537,9 @@
       }
     });
 
-    if (has) renderSingle(m);
+    if (has && state.view === 'single') renderSingle(m);
+    if (has && state.view === 'multi') renderMulti(m);
+    if (state.fs) renderFs(m);
 
     const list = markedPhotos();
     const total = list.reduce((a, p) => a + p.size, 0);
@@ -311,18 +555,7 @@
     $('big').classList.toggle('marked', mk);
     if (bigFor !== p.path) {
       bigFor = p.path;
-      const img = $('big-img');
-      const np = $('big-noprev');
-      if (p.viewable) {
-        img.hidden = false; np.hidden = true;
-        img.src = thumbUrl(p.path, 'l');
-        img.alt = p.name;
-      } else {
-        img.hidden = true; np.hidden = false;
-        img.removeAttribute('src');
-        np.textContent = `${extOf(p.name)} 파일은 미리보기를 지원하지 않습니다`;
-      }
-      // 다음 사진 미리 받아 두기
+      showImage($('big-img'), $('big-noprev'), p, 'l');
       const nx = state.photos[state.focus + 1];
       if (nx && nx.viewable) { const pre = new Image(); pre.src = thumbUrl(nx.path, 'l'); }
       loadInfo(p);
@@ -382,11 +615,7 @@
     $('dlg-ok').disabled = true;
     $('dlg-ok').textContent = '삭제 중…';
     try {
-      const res = await api('/api/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Token': TOKEN },
-        body: JSON.stringify({ paths: list.map((p) => p.path), permanent }),
-      });
+      const res = await post('/api/delete', { paths: list.map((p) => p.path), permanent });
       const gone = new Set(res.deleted.map((d) => d.path));
       const m = marksOf(state.folder);
       gone.forEach((p) => m.delete(p));
@@ -398,8 +627,7 @@
       const oldFocus = state.focus;
       $('dialog').hidden = true;
       showFolder(state.folder, remaining);
-      state.focus = keepFocus >= 0 ? keepFocus : Math.min(oldFocus, Math.max(0, remaining.length - 1));
-      renderAll();
+      setFocus(keepFocus >= 0 ? keepFocus : Math.min(oldFocus, Math.max(0, remaining.length - 1)));
       let msg = `${gone.size}장 ${permanent ? '영구 삭제됨' : '휴지통으로 이동됨'} · ${fmtSize(res.freed)} 확보`;
       if (res.failed.length) {
         msg += ` · ${res.failed.length}장 실패: ${res.failed[0].error}`;
@@ -421,10 +649,20 @@
     }
     const t = ev.target;
     if (t.matches('input[type=text], select, textarea')) return;
+    const step = state.view === 'multi' ? state.nup : 1;
     if (ev.key === 'ArrowRight') { ev.preventDefault(); setFocus(state.focus + 1); }
     else if (ev.key === 'ArrowLeft') { ev.preventDefault(); setFocus(state.focus - 1); }
-    else if ((ev.key === ' ' && !t.closest('.actionbar, .toolbar, .topbar, .sidebar')) || ev.key === 'Delete') { ev.preventDefault(); toggleMark(state.focus); }
+    else if (ev.key === 'PageDown') { ev.preventDefault(); setFocus(state.focus + step); }
+    else if (ev.key === 'PageUp') { ev.preventDefault(); setFocus(state.focus - step); }
+    else if (ev.key === 'Home') { ev.preventDefault(); setFocus(0); }
+    else if (ev.key === 'End') { ev.preventDefault(); setFocus(state.photos.length - 1); }
+    else if (ev.key === 'Escape' && state.fs) { ev.preventDefault(); closeFs(); }
+    else if (ev.key === 'f' || ev.key === 'F' || (ev.key === 'Enter' && !t.matches('button'))) { ev.preventDefault(); state.fs ? closeFs() : openFs(); }
+    else if (ev.key === ' ' || ev.key === 'Delete') { ev.preventDefault(); toggleMark(state.focus); }
   });
 
-  loadRoots().catch((e) => toast(e.message, true));
+  // 별도 프로그램 창이면 "폴더 열기"가 윈도우 폴더 선택 창을 띄운다
+  window.addEventListener('pywebviewready', () => { $('open-folder').title = '폴더 선택 창 열기'; });
+
+  init().catch((e) => toast(e.message, true));
 })();

@@ -1,5 +1,7 @@
 Flask>=3.0
 Pillow>=10.0
 Send2Trash>=1.8
+# 별도 프로그램 창 (Windows는 Edge WebView2 사용, Windows 10/11에 기본 포함)
+pywebview>=5.0
 # 아이폰 HEIC 사진 미리보기가 필요하면 아래 줄의 # 을 지우세요
 # pillow-heif>=0.16

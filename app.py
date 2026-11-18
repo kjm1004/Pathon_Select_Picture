@@ -1,14 +1,17 @@
-"""사진 정리 — 날짜별 폴더의 사진을 보면서 직접 골라 삭제하는 로컬 프로그램.
+"""사진 정리 — 날짜별 폴더의 사진을 보면서 직접 골라 삭제하는 프로그램.
 
-실행:  python app.py [--root "E:\\사진"] [--port 8765] [--no-browser]
-브라우저에서 http://127.0.0.1:8765 이 열립니다. 서버는 이 PC(127.0.0.1)에서만 접속됩니다.
+실행:  python app.py                 별도 프로그램 창으로 실행 (기본)
+       python app.py --browser       예전처럼 웹 브라우저로 실행
+       python app.py --root "E:\\사진"  처음 열 폴더 지정 (지정하지 않으면 마지막 작업 폴더)
+화면은 내부 서버(127.0.0.1, 이 PC에서만 접속)가 그립니다.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
-import io
+import json
+import logging
 import os
 import secrets
 import string
@@ -31,9 +34,13 @@ except Exception:  # pragma: no cover
 
 from send2trash import send2trash
 
-BASE_DIR = Path(__file__).resolve().parent
+# PyInstaller로 만든 exe에서는 static 폴더가 임시 압축 해제 폴더에 있다
+BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC_DIR = BASE_DIR / "static"
-CACHE_DIR = Path(os.environ.get("PHOTO_CLEANER_CACHE", Path.home() / ".photo-cleaner" / "cache"))
+DATA_DIR = Path(os.environ.get("PHOTO_CLEANER_HOME", Path.home() / ".photo-cleaner"))
+CACHE_DIR = Path(os.environ.get("PHOTO_CLEANER_CACHE", DATA_DIR / "cache"))
+SETTINGS_FILE = DATA_DIR / "settings.json"
+DEFAULT_SETTINGS = {"root": None, "folder": None, "photo": None, "view": "single", "nup": 2, "gridSize": "m"}
 
 # 미리보기를 만들 수 있는 형식
 VIEWABLE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
@@ -43,7 +50,7 @@ if HEIF_OK:
 LIST_ONLY_EXT = {".heic", ".heif", ".cr2", ".cr3", ".nef", ".arw", ".dng", ".orf", ".rw2", ".raf"} - VIEWABLE_EXT
 PHOTO_EXT = VIEWABLE_EXT | LIST_ONLY_EXT
 
-THUMB_SIZES = {"s": 160, "m": 360, "l": 1600}
+THUMB_SIZES = {"s": 160, "m": 360, "l": 1600, "x": 2560}
 TOKEN = secrets.token_urlsafe(24)
 
 app = Flask(__name__, static_folder=None)
@@ -100,11 +107,43 @@ def has_subdirs(folder: Path) -> bool:
     return False
 
 
-def list_roots() -> list[dict]:
-    roots = []
+def load_settings() -> dict:
+    data = dict(DEFAULT_SETTINGS)
+    try:
+        saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        if isinstance(saved, dict):
+            data.update({k: v for k, v in saved.items() if k in DEFAULT_SETTINGS})
+    except (OSError, ValueError):
+        pass
+    return data
+
+
+def save_settings(changes: dict) -> dict:
+    data = load_settings()
+    data.update({k: v for k, v in changes.items() if k in DEFAULT_SETTINGS})
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = SETTINGS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, SETTINGS_FILE)
+    return data
+
+
+def start_root() -> str | None:
+    """처음 열 폴더: --root 지정 > 마지막 작업 드라이브/폴더."""
     start = app.config.get("START_ROOT")
     if start:
-        roots.append({"name": str(start), "path": str(start)})
+        return str(start)
+    saved = load_settings().get("root")
+    if saved and os.path.isdir(saved):
+        return saved
+    return None
+
+
+def list_roots() -> list[dict]:
+    roots = []
+    start = start_root()
+    if start:
+        roots.append({"name": start, "path": start})
     if os.name == "nt":
         for letter in string.ascii_uppercase:
             d = f"{letter}:\\"
@@ -233,8 +272,25 @@ def static_files(name):
 
 @app.get("/api/roots")
 def api_roots():
-    start = app.config.get("START_ROOT")
-    return jsonify(roots=list_roots(), start=str(start) if start else None)
+    return jsonify(roots=list_roots(), start=start_root(), desktop=bool(app.config.get("DESKTOP")))
+
+
+@app.get("/api/settings")
+def api_settings_get():
+    data = load_settings()
+    if app.config.get("START_ROOT"):  # --root 로 시작하면 그 폴더를 우선
+        root = str(app.config["START_ROOT"])
+        if data.get("root") != root:
+            data.update(root=root, folder=None, photo=None)
+    return jsonify(data)
+
+
+@app.post("/api/settings")
+def api_settings_post():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        abort(400, "잘못된 설정입니다")
+    return jsonify(save_settings(data))
 
 
 @app.get("/api/dirs")
@@ -281,7 +337,7 @@ def api_thumb():
     path = safe_path(request.args.get("path"))
     size_key = request.args.get("size", "s")
     if size_key not in THUMB_SIZES:
-        abort(400, "size는 s, m, l 중 하나입니다")
+        abort(400, "size는 s, m, l, x 중 하나입니다")
     if not path.is_file() or path.suffix.lower() not in VIEWABLE_EXT:
         abort(415, "미리보기를 만들 수 없는 형식입니다")
     try:
@@ -327,11 +383,69 @@ def api_delete():
 
 # ---------------------------------------------------------------- 실행
 
+class DesktopApi:
+    """화면(JS)에서 window.pywebview.api.* 로 부르는 기능."""
+
+    def __init__(self):
+        self._window = None
+        self._fullscreen = False
+
+    def pick_folder(self):
+        import webview
+
+        kind = getattr(getattr(webview, "FileDialog", None), "FOLDER", None) or webview.FOLDER_DIALOG
+        result = self._window.create_file_dialog(kind)
+        if not result:
+            return None
+        return result[0] if isinstance(result, (list, tuple)) else str(result)
+
+    def set_fullscreen(self, on):
+        on = bool(on)
+        if on != self._fullscreen:
+            self._window.toggle_fullscreen()
+            self._fullscreen = on
+        return self._fullscreen
+
+
+def redirect_output_if_windowless() -> None:
+    """pythonw / exe(창 모드)에서는 콘솔이 없으므로 로그를 파일로 보낸다."""
+    if sys.stdout is None or sys.stderr is None:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        log = open(DATA_DIR / "app.log", "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stdout or log
+        sys.stderr = sys.stderr or log
+
+
+def run_desktop() -> bool:
+    try:
+        import webview
+    except ImportError:
+        print("pywebview가 설치되지 않아 웹 브라우저로 실행합니다. (pip install pywebview)")
+        return False
+    from werkzeug.serving import make_server
+
+    app.config["DESKTOP"] = True
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    server = make_server("127.0.0.1", 0, app, threaded=True)  # 빈 포트 자동 선택
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}/"
+
+    api = DesktopApi()
+    api._window = webview.create_window(
+        "사진 정리", url, js_api=api, width=1440, height=900, min_size=(960, 640), background_color="#121417"
+    )
+    webview.start()
+    server.shutdown()
+    return True
+
+
 def main(argv: list[str] | None = None) -> None:
+    redirect_output_if_windowless()
     ap = argparse.ArgumentParser(description="사진 정리 프로그램")
-    ap.add_argument("--root", help="처음 열 사진 폴더 (예: E:\\사진)")
-    ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않음")
+    ap.add_argument("--root", help="처음 열 사진 폴더 (예: E:\\사진). 생략하면 마지막 작업 폴더")
+    ap.add_argument("--browser", action="store_true", help="별도 창 대신 웹 브라우저로 실행")
+    ap.add_argument("--port", type=int, default=8765, help="브라우저 모드 포트 (기본 8765)")
+    ap.add_argument("--no-browser", action="store_true", help="브라우저 모드에서 브라우저를 자동으로 열지 않음")
     args = ap.parse_args(argv)
 
     if args.root:
@@ -339,6 +453,9 @@ def main(argv: list[str] | None = None) -> None:
         if not root.is_dir():
             sys.exit(f"폴더를 찾을 수 없습니다: {root}")
         app.config["START_ROOT"] = root.resolve()
+
+    if not args.browser and run_desktop():
+        return
 
     url = f"http://127.0.0.1:{args.port}/"
     print(f"사진 정리 실행 중: {url}  (종료: Ctrl+C)")
