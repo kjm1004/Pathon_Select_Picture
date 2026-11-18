@@ -76,6 +76,81 @@
   // 별도 프로그램(pywebview) 창에서 실행 중인지
   const desktop = () => !!(window.pywebview && window.pywebview.api);
 
+  // ------------------------------------------------------------ 확대 / 축소
+  // 사진은 틀(box) 안에서만 확대·이동된다. 1배 = 창에 맞춤.
+  const MAX_ZOOM = 10;
+  function makeZoom(box, img, labelEl) {
+    const z = { s: 1, x: 0, y: 0, moved: false };
+    const apply = () => {
+      img.style.transform = z.s === 1 ? '' : `translate(${z.x}px, ${z.y}px) scale(${z.s})`;
+      box.classList.toggle('zoomed', z.s > 1);
+      labelEl.textContent = z.s === 1 ? '맞춤' : `${z.s.toFixed(1)}배`;
+      if (z.s >= 1.6) loadOriginal(img);
+    };
+    // 실제 사진이 그려지는 영역(맞춤 상태에서 여백 제외) 안에서만 움직이게 한다
+    const clamp = () => {
+      const w = box.clientWidth, h = box.clientHeight;
+      const nw = img.naturalWidth || w, nh = img.naturalHeight || h;
+      const fit = Math.min(w / nw, h / nh);
+      const cw = nw * fit, ch = nh * fit, ox = (w - cw) / 2, oy = (h - ch) / 2;
+      const axis = (pos, view, size, off) => (z.s * size <= view
+        ? (view - z.s * size) / 2 - z.s * off
+        : Math.min(-z.s * off, Math.max(view - z.s * (off + size), pos)));
+      z.x = axis(z.x, w, cw, ox);
+      z.y = axis(z.y, h, ch, oy);
+    };
+    const zoomAt = (ns, px, py) => {
+      ns = Math.max(1, Math.min(MAX_ZOOM, ns));
+      z.x = px - (px - z.x) * (ns / z.s);
+      z.y = py - (py - z.y) * (ns / z.s);
+      z.s = ns;
+      if (ns === 1) { z.x = 0; z.y = 0; }
+      clamp(); apply();
+    };
+    const center = () => [box.clientWidth / 2, box.clientHeight / 2];
+    box.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const r = box.getBoundingClientRect();
+      zoomAt(z.s * Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+    }, { passive: false });
+    let drag = null;
+    box.addEventListener('pointerdown', (e) => {
+      z.moved = false;
+      if (z.s <= 1 || e.button !== 0) return;
+      drag = { px: e.clientX, py: e.clientY, x: z.x, y: z.y };
+      box.setPointerCapture(e.pointerId);
+      box.classList.add('dragging');
+    });
+    box.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.px, dy = e.clientY - drag.py;
+      if (Math.abs(dx) + Math.abs(dy) > 4) z.moved = true;
+      z.x = drag.x + dx; z.y = drag.y + dy;
+      clamp(); apply();
+    });
+    const end = () => { drag = null; box.classList.remove('dragging'); };
+    box.addEventListener('pointerup', end);
+    box.addEventListener('pointercancel', end);
+    window.addEventListener('resize', () => { clamp(); apply(); });
+    return {
+      zoomIn: () => zoomAt(z.s * 1.25, ...center()),
+      zoomOut: () => zoomAt(z.s / 1.25, ...center()),
+      reset: () => { z.s = 1; z.x = 0; z.y = 0; apply(); },
+      toggle: (px, py) => (z.s > 1 ? zoomAt(1, 0, 0) : zoomAt(2, px, py)),
+      get dragged() { return z.moved; },
+    };
+  }
+
+  // 크게 확대하면 원본 파일로 바꿔서 선명하게 보여 준다
+  function loadOriginal(img) {
+    const path = img.dataset.want;
+    if (!path || img.dataset.orig === path) return;
+    img.dataset.orig = path;
+    const hi = new Image();
+    hi.onload = () => { if (img.dataset.want === path) img.src = hi.src; };
+    hi.src = `/api/original?path=${encodeURIComponent(path)}`;
+  }
+
   // ------------------------------------------------------------ 시작
   async function init() {
     const [roots, settings] = await Promise.all([api('/api/roots'), api('/api/settings')]);
@@ -427,7 +502,15 @@
   $('prev').addEventListener('click', () => setFocus(state.focus - 1));
   $('next').addEventListener('click', () => setFocus(state.focus + 1));
   $('toggle-btn').addEventListener('click', () => toggleMark(state.focus));
-  $('big').addEventListener('click', () => openFs());
+  const bigZoom = makeZoom($('big'), $('big-img'), $('zoom-label'));
+  const fsZoom = makeZoom($('fs-stage'), $('fs-img'), $('fs-zoom-label'));
+  $('big').addEventListener('dblclick', () => { if (!bigZoom.dragged) openFs(); });
+  $('zoom-in').addEventListener('click', () => bigZoom.zoomIn());
+  $('zoom-out').addEventListener('click', () => bigZoom.zoomOut());
+  $('zoom-label').addEventListener('click', () => bigZoom.reset());
+  $('fs-zoom-in').addEventListener('click', () => fsZoom.zoomIn());
+  $('fs-zoom-out').addEventListener('click', () => fsZoom.zoomOut());
+  $('fs-zoom-label').addEventListener('click', () => fsZoom.reset());
   $('fs-btn').addEventListener('click', () => openFs());
 
   $('mark-all').addEventListener('click', () => {
@@ -467,7 +550,11 @@
   $('fs-prev').addEventListener('click', () => setFocus(state.focus - 1));
   $('fs-next').addEventListener('click', () => setFocus(state.focus + 1));
   $('fs-toggle').addEventListener('click', () => toggleMark(state.focus));
-  $('fs-stage').addEventListener('dblclick', closeFs);
+  $('fs-stage').addEventListener('dblclick', (e) => {
+    if (fsZoom.dragged) return;
+    const r = $('fs-stage').getBoundingClientRect();
+    fsZoom.toggle(e.clientX - r.left, e.clientY - r.top);  // 전체 화면에서 더블클릭 = 2배 확대 / 맞춤
+  });
 
   let fsFor = null;
   function renderFs(m) {
@@ -491,12 +578,15 @@
 
   // 큰 사진: 먼저 작은 썸네일을 보여 주고 큰 사진이 오면 바꾼다
   function showImage(img, noprev, p, size) {
+    if (img === $('big-img') && bigZoom) bigZoom.reset();
+    if (img === $('fs-img') && fsZoom) fsZoom.reset();
+    delete img.dataset.orig;
     if (p.viewable) {
       img.hidden = false; noprev.hidden = true;
       img.alt = p.name;
       img.src = thumbUrl(p.path, 'm');
       const big = new Image();
-      big.onload = () => { if (img.dataset.want === p.path) img.src = big.src; };
+      big.onload = () => { if (img.dataset.want === p.path && img.dataset.orig !== p.path) img.src = big.src; };
       img.dataset.want = p.path;
       big.src = thumbUrl(p.path, size);
     } else {
@@ -657,6 +747,10 @@
     else if (ev.key === 'Home') { ev.preventDefault(); setFocus(0); }
     else if (ev.key === 'End') { ev.preventDefault(); setFocus(state.photos.length - 1); }
     else if (ev.key === 'Escape' && state.fs) { ev.preventDefault(); closeFs(); }
+    else if (ev.key === '+' || ev.key === '=' || ev.key === '-' || ev.key === '0') {
+      const zm = state.fs ? fsZoom : state.view === 'single' ? bigZoom : null;
+      if (zm) { ev.preventDefault(); ev.key === '0' ? zm.reset() : ev.key === '-' ? zm.zoomOut() : zm.zoomIn(); }
+    }
     else if (ev.key === 'f' || ev.key === 'F' || (ev.key === 'Enter' && !t.matches('button'))) { ev.preventDefault(); state.fs ? closeFs() : openFs(); }
     else if (ev.key === ' ' || ev.key === 'Delete') { ev.preventDefault(); toggleMark(state.focus); }
   });

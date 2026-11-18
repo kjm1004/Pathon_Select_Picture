@@ -349,6 +349,32 @@ def api_thumb():
     return resp
 
 
+# 브라우저가 직접 그릴 수 있는 형식은 확대할 때 원본을 그대로 보낸다
+BROWSER_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+
+
+@app.get("/api/original")
+def api_original():
+    path = safe_path(request.args.get("path"))
+    if not path.is_file() or path.suffix.lower() not in VIEWABLE_EXT:
+        abort(415, "미리보기를 만들 수 없는 형식입니다")
+    if path.suffix.lower() not in BROWSER_EXT:  # TIFF, HEIC 등은 큰 JPEG로 변환
+        return api_thumb_for(path, "x")
+    resp = send_file(path, conditional=True)
+    resp.headers["Cache-Control"] = "private, max-age=86400"
+    return resp
+
+
+def api_thumb_for(path: Path, size_key: str):
+    try:
+        out = make_thumb(path, size_key)
+    except Exception:
+        abort(415, "이미지를 읽을 수 없습니다")
+    resp = send_file(out, mimetype="image/jpeg")
+    resp.headers["Cache-Control"] = "private, max-age=86400"
+    return resp
+
+
 @app.get("/api/info")
 def api_info():
     path = safe_path(request.args.get("path"))
