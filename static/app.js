@@ -17,6 +17,10 @@
     nup: 2,                // 나란히 보기 장 수
     gridSize: 'm',
     smooth: 2,             // 전환 부드럽기 0(끄기)~4(아주 느리게)
+    allPhotos: [],         // 폴더(또는 모아 보기)의 전체 사진. photos는 별점 필터를 거친 목록
+    rfilter: 'all',        // 별점 필터: 'all' 또는 0~5
+    defaultStars: 3,       // 별점을 매기지 않은 사진의 별점
+    collection: null,      // 별점 모아 보기 중이면 별 개수
     fs: false,             // 전체 화면 보기
     marks: new Map(),      // folderPath -> Set(photoPath)
     info: new Map(),
@@ -170,6 +174,8 @@
     { dur: 680, slide: 60, gap: 540, move: 1.9 },  // 아주 느리게
   ];
   const smooth = () => SMOOTH[state.smooth] || SMOOTH[2];
+  // 메인 사진 전환과 인덱스 이동이 같은 곡선(ease-out quart)으로 움직이도록 맞춘다
+  const EASE = 'cubic-bezier(.25,1,.5,1)';
   const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // 사진 교체 효과: 이전 사진(복사본)은 dir 반대쪽으로 밀리며 사라지고, 새 사진은 dir 쪽에서 나타난다
@@ -186,11 +192,11 @@
     const base = ghost.style.transform || '';
     ghost.animate(
       [{ opacity: op, transform: `translateX(0px) ${base}` }, { opacity: 0, transform: `translateX(${-slide}px) ${base}` }],
-      { duration: cfg.dur, easing: 'cubic-bezier(.2,.7,.3,1)', fill: 'forwards' },
+      { duration: cfg.dur, easing: EASE, fill: 'forwards' },
     ).onfinish = () => ghost.remove();
     img.animate(
       [{ opacity: 0, transform: `translateX(${slide}px)` }, { opacity: op, transform: 'translateX(0px)' }],
-      { duration: cfg.dur, easing: 'cubic-bezier(.2,.7,.3,1)' },
+      { duration: cfg.dur, easing: EASE },
     );
   }
 
@@ -208,6 +214,124 @@
       if (p && p.viewable) preload(thumbUrl(p.path, size));
     }
   }
+
+  // ------------------------------------------------------------ 별점
+  const effStars = (p) => p.rating || state.defaultStars;
+  // i: 사진 번호(state.photos 기준). 직접 매긴 별점은 진하게, 기본 별점은 흐리게.
+  function starsHtml(i, p) {
+    const v = effStars(p);
+    let h = '';
+    for (let s = 1; s <= 5; s++) {
+      h += `<button class="star${s <= v ? ' on' : ''}" data-i="${i}" data-s="${s}" aria-label="별 ${s}개${p.rating === s ? ' (지우기)' : ''}">★</button>`;
+    }
+    return h;
+  }
+  function paintStars(el, i, p) {
+    if (!el) return;
+    const key = `${i}|${p.rating}|${state.defaultStars}`;
+    if (el.dataset.k === key) return;
+    el.dataset.k = key;
+    el.innerHTML = starsHtml(i, p);
+    el.classList.toggle('dflt', !p.rating);
+    el.title = p.rating ? `별점 ${p.rating}` : (state.defaultStars ? `별점 없음 (기본 ★${state.defaultStars})` : '별점 없음');
+  }
+
+  // 같은 별을 다시 누르면 지운다(기본 별점으로)
+  async function setRating(i, stars) {
+    const p = state.photos[i];
+    if (!p) return;
+    if (stars && p.rating === stars) stars = 0;
+    const before = p.rating;
+    p.rating = stars;
+    renderAll();
+    try {
+      await post('/api/rating', { paths: [p.path], stars });
+      refreshSummary();
+    } catch (e) {
+      p.rating = before; renderAll();
+      toast('별점을 저장하지 못했습니다: ' + e.message, true);
+    }
+  }
+  document.addEventListener('click', (ev) => {
+    const b = ev.target.closest('.star');
+    if (!b) return;
+    ev.stopPropagation();
+    const i = b.dataset.i === 'cur' ? state.focus : +b.dataset.i;
+    setFocus(i, false);
+    setRating(i, +b.dataset.s);
+  }, true);
+
+  // 별점 모아 보기 목록 (드라이브 전체, 직접 매긴 별점만)
+  let summaryTimer = null;
+  function refreshSummary() {
+    clearTimeout(summaryTimer);
+    summaryTimer = setTimeout(async () => {
+      if (!state.root) return;
+      try {
+        const d = await api('/api/ratings/summary?root=' + encodeURIComponent(state.root));
+        renderCollect(d.counts);
+      } catch (_) { /* 무시 */ }
+    }, 300);
+  }
+  let lastCounts = {};
+  function renderCollect(counts) {
+    if (counts) lastCounts = counts;
+    $('collect').innerHTML = [5, 4, 3, 2, 1].map((n) => {
+      const stars = '★'.repeat(n) + `<span class="off">${'★'.repeat(5 - n)}</span>`;
+      return `<button class="crow${state.collection === n ? ' sel' : ''}" data-n="${n}" aria-label="별 ${n}개 사진 모아 보기">
+        <span class="cs">${stars}</span><span class="cnt">${lastCounts[n] || 0}</span></button>`;
+    }).join('');
+  }
+  $('collect').addEventListener('click', (ev) => {
+    const b = ev.target.closest('.crow');
+    if (b) openCollection(+b.dataset.n);
+  });
+
+  async function openCollection(n) {
+    try {
+      const d = await api(`/api/ratings/collect?root=${encodeURIComponent(state.root)}&stars=${n}`);
+      state.collection = n;
+      showFolder(`★${n}`, d.photos, `★${n} 모아 보기`);
+      $('path-label').textContent = `별점 ${n}개 모아 보기 · ${state.root} 전체`;
+      refreshSummary();
+    } catch (e) { toast(e.message, true); }
+  }
+
+  // 별점 필터
+  function filterOptions() {
+    const all = state.allPhotos;
+    const cnt = (n) => all.filter((p) => effStars(p) === n).length;
+    const opts = [['all', `전체 (${all.length})`]];
+    for (let n = 5; n >= 1; n--) opts.push([String(n), `${'★'.repeat(n)} (${cnt(n)})`]);
+    if (state.defaultStars === 0) opts.push(['0', `별점 없음 (${cnt(0)})`]);
+    const sel = $('rfilter');
+    const html = opts.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+    if (sel.dataset.h !== html) { sel.innerHTML = html; sel.dataset.h = html; }
+    if (![...sel.options].some((o) => o.value === String(state.rfilter))) state.rfilter = 'all';
+    sel.value = String(state.rfilter);
+    $('rfilter-wrap').hidden = state.collection !== null || !state.folder;
+  }
+
+  // 필터를 적용해 화면 목록을 다시 만든다. keepPath 사진이 남아 있으면 그 사진을 계속 보여 준다.
+  function applyFilter(keepPath = null, fallbackIndex = 0) {
+    const f = state.rfilter;
+    state.photos = f === 'all' ? state.allPhotos.slice() : state.allPhotos.filter((p) => effStars(p) === +f);
+    let i = keepPath ? state.photos.findIndex((p) => p.path === keepPath) : -1;
+    if (i < 0) i = Math.min(fallbackIndex, Math.max(0, state.photos.length - 1));
+    state.focus = i;
+    multiBuiltFor = null;
+    bigFor = null; fsFor = null;
+    buildStrip();
+    buildGrid();
+    renderAll();
+    centerStrip(state.focus);
+  }
+  $('rfilter').addEventListener('change', (e) => {
+    e.target.blur();
+    const cur = state.photos[state.focus];
+    state.rfilter = e.target.value === 'all' ? 'all' : +e.target.value;
+    applyFilter(cur && cur.path);
+  });
 
   // ------------------------------------------------------------ 휠 / 던지기
   // 휠 한 칸(또는 터치패드로 일정량)마다 dir(+1/-1)을 한 번 알려 준다
@@ -232,14 +356,14 @@
     const snapP = (p) => { const s = pitch(); return s ? Math.round(p / s) * s : p; };
     const stop = () => { if (raf) cancelAnimationFrame(raf); raf = null; anim = null; };
     // base: 기본 이동 시간(ms). 멀리 갈수록 조금 더 길게, 처음엔 빠르고 끝에서 부드럽게 멈춘다.
-    function animateTo(dest, base = 200) {
+    function animateTo(dest, base = 200, exactDur = null) {
       dest = clampP(dest);
       const start = el.scrollLeft, t0 = performance.now();
       stop();
       const dist = dest - start;
       if (Math.abs(dist) < 0.5) { el.scrollLeft = dest; if (opts.onSettle) opts.onSettle(); return; }
-      const mul = smooth().move;
-      const dur = Math.min(base * 2.5, base + Math.abs(dist) * 0.25) * mul;
+      if (exactDur === 0) { el.scrollLeft = dest; if (opts.onSettle) opts.onSettle(); return; }
+      const dur = exactDur || Math.min(base * 2.5, base + Math.abs(dist) * 0.25) * smooth().move;
       anim = { dest };
       const step = (now) => {
         const t = Math.min(1, (now - t0) / dur);
@@ -318,6 +442,7 @@
     state.gridSize = ['s', 'm', 'l'].includes(settings.gridSize) ? settings.gridSize : 'm';
     setSidebar(settings.sidebar !== false, false);
     state.smooth = [0, 1, 2, 3, 4].includes(+settings.smooth) ? +settings.smooth : 2;
+    state.defaultStars = [0, 1, 2, 3, 4, 5].includes(+settings.defaultStars) ? +settings.defaultStars : 3;
     $('smooth').value = String(state.smooth);
     $('nup').value = String(state.nup);
     $('gsize').value = state.gridSize;
@@ -375,6 +500,7 @@
       return;
     }
     saveSettings({ root: path });
+    refreshSummary();
     if (restoreFolder && isUnder(restoreFolder, path)) {
       const ok = await revealFolder(restoreFolder);
       if (ok) { await openFolder(restoreFolder, false, restorePhoto); return; }
@@ -488,10 +614,11 @@
   async function openFolder(path, quiet = false, focusName = null) {
     try {
       const data = await api('/api/photos?path=' + encodeURIComponent(path));
+      state.collection = null;
       if (quiet && data.photos.length === 0) { showFolder(null, []); return; }
       showFolder(path, data.photos);
       if (focusName) {
-        const i = data.photos.findIndex((p) => p.name === focusName);
+        const i = state.photos.findIndex((p) => p.name === focusName);
         if (i > 0) setFocus(i);
       }
       saveSettings({ root: state.root, folder: path, photo: state.photos[state.focus] ? state.photos[state.focus].name : null });
@@ -500,20 +627,18 @@
     }
   }
 
-  function showFolder(path, photos) {
+  function showFolder(path, photos, title = null) {
     state.folder = path;
-    state.photos = photos;
-    state.focus = 0;
-    multiBuiltFor = null;
+    state.allPhotos = photos;
+    if (state.collection !== null) state.rfilter = 'all';
     const n = path && state.nodes.get(path);
-    const name = n ? n.name : path ? baseName(path) : '';
+    const name = title || (n ? n.name : path ? baseName(path) : '');
+    state.folderName = name;
     $('path-label').textContent = path || '';
     $('path-label').title = path || '';
-    $('index-title').textContent = path ? `${name} · ${photos.length}장` : '';
-    buildStrip();
-    buildGrid();
     renderTree();
-    renderAll();
+    renderCollect();
+    applyFilter();
   }
 
   // ------------------------------------------------------------ 인덱스 / 바둑판
@@ -523,6 +648,7 @@
       <button class="ix" data-i="${i}" aria-label="${i + 1}번 ${esc(p.name)}">
         <span class="th">${p.viewable ? `<img loading="lazy" draggable="false" src="${thumbUrl(p.path, 's')}" alt="">` : `<span class="ext">${esc(extOf(p.name))}</span>`}
           <span class="x"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#1A0E0A" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+          <span class="rb" hidden></span>
         </span>
         <span class="num">${num3(i)}</span>
       </button>`).join('');
@@ -539,7 +665,7 @@
           <span class="del"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#1A0E0A" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>삭제</span>
         </button>
         <div class="row"><input type="checkbox" id="cb-${i}" data-i="${i}"><label for="cb-${i}" title="${esc(p.name)}">${esc(p.name)}</label></div>
-        <span class="sub">${esc(p.mtime)} · ${fmtSize(p.size)}</span>
+        <div class="row2"><span class="sub">${p.dir ? esc(p.dir) + ' · ' : ''}${fmtSize(p.size)}</span><span class="stars"></span></div>
       </div>`).join('');
     state.gridEls = [...grid.children];
   }
@@ -594,7 +720,7 @@
         </button>
         <div class="mrow">
           <span class="nm" title="${esc(p.name)}">${esc(p.name)}</span>
-          <span class="sub">${fmtSize(p.size)}</span>
+          <span class="stars mstars"></span>
           <button class="mtoggle" data-i="${i}"></button>
         </div>
       </div>`).join('');
@@ -636,6 +762,7 @@
       const mk = m.has(state.photos[i].path);
       c.classList.toggle('marked', mk);
       c.classList.toggle('focus', i === state.focus);
+      paintStars(c.querySelector('.mstars'), i, state.photos[i]);
       const t = c.querySelector('.mtoggle');
       const label = mk ? '표시 해제' : '삭제 표시';
       if (t.textContent !== label) t.textContent = label;
@@ -666,8 +793,24 @@
     const el = state.stripEls[i];
     if (!el) return;
     const strip = $('strip');
-    stripKinetic.animateTo(el.offsetLeft - (strip.clientWidth - el.offsetWidth) / 2, 180);
+    // 메인 사진이 바뀌는 시간과 똑같이 움직인다 (끄기면 바로)
+    stripKinetic.animateTo(el.offsetLeft - (strip.clientWidth - el.offsetWidth) / 2, 0, smooth().dur || 0);
   }
+
+  // 나란히 보기가 움직이는 동안 인덱스가 실시간으로 따라간다 (화면 가운데 사진을 인덱스 가운데에)
+  $('multi').addEventListener('scroll', () => {
+    if (state.view !== 'multi') return;
+    const pitch = multiPitch();
+    const a = state.stripEls[0];
+    if (!pitch || !a) return;
+    const b = state.stripEls[1];
+    const sp = b ? b.offsetLeft - a.offsetLeft : a.offsetWidth;
+    const n = Math.min(state.nup, state.photos.length);
+    const c = $('multi').scrollLeft / pitch + (n - 1) / 2;
+    const strip = $('strip');
+    stripKinetic.stop();
+    strip.scrollLeft = a.offsetLeft + c * sp + a.offsetWidth / 2 - strip.clientWidth / 2;
+  }, { passive: true });
 
   // ------------------------------------------------------------ 상태 변경
   let navDir = 0;   // 직전 이동 방향 (+1 다음, -1 이전) — 전환 효과 방향
@@ -681,7 +824,7 @@
     const p = state.photos[state.focus];
     if (p) saveSettings({ photo: p.name });
     if (scroll) {
-      centerStrip(state.focus);
+      if (state.view !== 'multi') centerStrip(state.focus);   // 나란히 보기는 스크롤에 맞춰 따라감
       if (state.view === 'grid') {
         const g = state.gridEls[state.focus];
         if (g) g.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -714,7 +857,28 @@
   }
   document.querySelectorAll('.seg [data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
   $('nup').addEventListener('change', (e) => { e.target.blur(); state.nup = +e.target.value; sizeMulti(); multiKinetic.stop(); renderAll(); ensureMultiVisible(true); saveSettings({ nup: state.nup }); });
-  $('smooth').addEventListener('change', (e) => { e.target.blur(); state.smooth = +e.target.value; saveSettings({ smooth: state.smooth }); });
+  function setSmooth(v) {
+    state.smooth = v;
+    $('smooth').value = String(v); $('set-smooth').value = String(v);
+    saveSettings({ smooth: v });
+  }
+  $('smooth').addEventListener('change', (e) => { e.target.blur(); setSmooth(+e.target.value); });
+  $('set-smooth').addEventListener('change', (e) => setSmooth(+e.target.value));
+  $('set-default').addEventListener('change', (e) => {
+    state.defaultStars = +e.target.value;
+    saveSettings({ defaultStars: state.defaultStars });
+    const cur = state.photos[state.focus];
+    applyFilter(cur && cur.path, state.focus);
+  });
+  function openSettings() {
+    $('set-default').value = String(state.defaultStars);
+    $('set-smooth').value = String(state.smooth);
+    $('settings').hidden = false;
+    $('set-default').focus();
+  }
+  function closeSettings() { $('settings').hidden = true; $('settings-btn').focus(); }
+  $('settings-btn').addEventListener('click', openSettings);
+  $('set-close').addEventListener('click', closeSettings);
   $('gsize').addEventListener('change', (e) => { e.target.blur(); state.gridSize = e.target.value; applyViewButtons(); saveSettings({ gridSize: state.gridSize }); });
 
   $('prev').addEventListener('click', () => setFocus(state.focus - 1));
@@ -789,6 +953,7 @@
     }
     $('fs-pos').textContent = `${state.focus + 1} / ${state.photos.length}`;
     $('fs-name').textContent = p.name;
+    paintStars($('fs-stars'), 'cur', p);
     $('fs-toggle').textContent = mk ? '삭제 표시 해제' : '삭제 표시';
     $('fs-toggle').classList.toggle('on', mk);
     $('fs-prev').disabled = state.focus === 0;
@@ -839,15 +1004,25 @@
       const mk = m.has(p.path);
       const f = i === state.focus;
       const s = state.stripEls[i];
-      if (s) { s.classList.toggle('marked', mk); s.classList.toggle('focus', f); s.setAttribute('aria-current', f ? 'true' : 'false'); }
+      if (s) {
+        s.classList.toggle('marked', mk); s.classList.toggle('focus', f); s.setAttribute('aria-current', f ? 'true' : 'false');
+        const rb = s.querySelector('.rb');
+        const txt = p.rating ? `★${p.rating}` : '';
+        if (rb.textContent !== txt) { rb.textContent = txt; rb.hidden = !txt; }
+      }
       const g = state.gridEls[i];
       if (g) {
         g.classList.toggle('marked', mk); g.classList.toggle('focus', f);
         const cb = g.querySelector('input'); if (cb.checked !== mk) cb.checked = mk;
         g.querySelector('.pic').setAttribute('aria-pressed', mk);
+        paintStars(g.querySelector('.stars'), i, p);
       }
     });
 
+    $('index-title').textContent = state.folder
+      ? `${state.folderName} · ${state.photos.length}장${state.photos.length !== state.allPhotos.length ? ` (전체 ${state.allPhotos.length}장 중)` : ''}`
+      : '';
+    filterOptions();
     if (has && state.view === 'single') renderSingle(m);
     if (has && state.view === 'multi') renderMulti(m);
     if (state.fs) renderFs(m);
@@ -872,6 +1047,7 @@
       loadInfo(p);
     }
     $('info-name').textContent = p.name;
+    paintStars($('stars'), 'cur', p);
     renderMeta(p);
     const btn = $('toggle-btn');
     btn.textContent = mk ? '삭제 표시 해제' : '삭제 표시';
@@ -883,6 +1059,7 @@
   function renderMeta(p) {
     const i = state.info.get(p.path);
     const parts = [];
+    if (p.dir) parts.push(p.dir);
     parts.push(i && i.taken ? i.taken : p.mtime);
     if (i && i.width) parts.push(`${i.width}×${i.height}`);
     parts.push(fmtSize(p.size));
@@ -931,14 +1108,17 @@
       const m = marksOf(state.folder);
       gone.forEach((p) => m.delete(p));
       const focusPath = state.photos[state.focus] && state.photos[state.focus].path;
-      const remaining = state.photos.filter((p) => !gone.has(p.path));
-      const node = state.nodes.get(state.folder);
-      if (node) node.count = remaining.length;
-      const keepFocus = remaining.findIndex((p) => p.path === focusPath);
       const oldFocus = state.focus;
+      state.allPhotos = state.allPhotos.filter((p) => !gone.has(p.path));
+      // 탐색기의 폴더별 사진 수 줄이기 (모아 보기에서는 여러 폴더)
+      gone.forEach((gp) => {
+        const node = state.nodes.get(gp.replace(/[\\/][^\\/]*$/, ''));
+        if (node && node.count) node.count -= 1;
+      });
       $('dialog').hidden = true;
-      showFolder(state.folder, remaining);
-      setFocus(keepFocus >= 0 ? keepFocus : Math.min(oldFocus, Math.max(0, remaining.length - 1)));
+      applyFilter(gone.has(focusPath) ? null : focusPath, oldFocus);
+      renderTree();
+      refreshSummary();
       let msg = `${gone.size}장 ${permanent ? '영구 삭제됨' : '휴지통으로 이동됨'} · ${fmtSize(res.freed)} 확보`;
       if (res.failed.length) {
         msg += ` · ${res.failed.length}장 실패: ${res.failed[0].error}`;
@@ -958,6 +1138,10 @@
       if (ev.key === 'Escape') closeDialog();
       return;
     }
+    if (!$('settings').hidden) {
+      if (ev.key === 'Escape') closeSettings();
+      return;
+    }
     const t = ev.target;
     if (t.matches('input[type=text], select, textarea')) return;
     const step = state.view === 'multi' ? state.nup : 1;
@@ -969,9 +1153,17 @@
     else if (ev.key === 'End') { ev.preventDefault(); setFocus(state.photos.length - 1); }
     else if (ev.key === 'Escape' && state.fs) { ev.preventDefault(); closeFs(); }
     else if ((ev.key === 'b' || ev.key === 'B' || ev.key === 'ㅠ') && !ev.ctrlKey && !state.fs) { ev.preventDefault(); setSidebar(!sidebarShown()); }
-    else if (ev.key === '+' || ev.key === '=' || ev.key === '-' || ev.key === '0') {
+    else if (/^[0-5]$/.test(ev.key) && !ev.ctrlKey && !ev.altKey) {
+      ev.preventDefault();
+      if (state.photos.length) {
+        const p = state.photos[state.focus];
+        const n = +ev.key;
+        if (n === 0 || p.rating !== n) setRating(state.focus, n);   // 키는 다시 눌러도 지우지 않음
+      }
+    }
+    else if (ev.key === '+' || ev.key === '=' || ev.key === '-' || ev.key === 'z' || ev.key === 'Z' || ev.key === 'ㅋ') {
       const zm = state.fs ? fsZoom : state.view === 'single' ? bigZoom : null;
-      if (zm) { ev.preventDefault(); ev.key === '0' ? zm.reset() : ev.key === '-' ? zm.zoomOut() : zm.zoomIn(); }
+      if (zm) { ev.preventDefault(); (ev.key === '-') ? zm.zoomOut() : (ev.key === '+' || ev.key === '=') ? zm.zoomIn() : zm.reset(); }
     }
     else if (ev.key === 'f' || ev.key === 'F' || ev.key === 'ㄹ' || (ev.key === 'Enter' && !t.matches('button'))) { ev.preventDefault(); state.fs ? closeFs() : openFs(); }
     else if (ev.key === ' ' || ev.key === 'Delete') { ev.preventDefault(); toggleMark(state.focus); }

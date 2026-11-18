@@ -102,3 +102,41 @@ def test_start_root_overrides_saved_folder(client, tmp_path, monkeypatch):
     client.mod.save_settings({"root": "/elsewhere", "folder": "/elsewhere/x"})
     s = client.get("/api/settings").get_json()
     assert s["root"] == str(client.root) and s["folder"] is None
+
+
+def test_ratings_set_list_collect_and_clear(client):
+    tok = {"X-Token": client.mod.TOKEN}
+    f0, f1 = str(client.day / "IMG_0.JPG"), str(client.day / "IMG_1.JPG")
+    assert client.post("/api/rating", json={"paths": [f0], "stars": 5}).status_code == 403
+    assert client.post("/api/rating", json={"paths": [f0], "stars": 9}, headers=tok).status_code == 400
+    assert client.post("/api/rating", json={"paths": [f0, f1], "stars": 5}, headers=tok).get_json()["count"] == 2
+    client.post("/api/rating", json={"paths": [f1], "stars": 2}, headers=tok)
+    ph = {p["name"]: p["rating"] for p in client.get("/api/photos", query_string={"path": str(client.day)}).get_json()["photos"]}
+    assert ph == {"IMG_0.JPG": 5, "IMG_1.JPG": 2, "IMG_2.JPG": 0}
+    s = client.get("/api/ratings/summary", query_string={"root": str(client.root)}).get_json()["counts"]
+    assert s["5"] == 1 and s["2"] == 1 and s["3"] == 0
+    c = client.get("/api/ratings/collect", query_string={"root": str(client.root), "stars": 5}).get_json()
+    assert [p["name"] for p in c["photos"]] == ["IMG_0.JPG"] and c["photos"][0]["dir"] == "2024-03-16 제주"
+    # 별점 지우기
+    client.post("/api/rating", json={"paths": [f0], "stars": 0}, headers=tok)
+    assert client.get("/api/ratings/summary", query_string={"root": str(client.root)}).get_json()["counts"]["5"] == 0
+
+
+def test_delete_removes_rating_and_collect_prunes_missing(client):
+    tok = {"X-Token": client.mod.TOKEN}
+    f1, f2 = str(client.day / "IMG_1.JPG"), str(client.day / "IMG_2.JPG")
+    client.post("/api/rating", json={"paths": [f1, f2], "stars": 4}, headers=tok)
+    client.post("/api/delete", json={"paths": [f1], "permanent": True}, headers=tok)
+    Path(f2).unlink()  # 프로그램 밖에서 지운 파일
+    c = client.get("/api/ratings/collect", query_string={"root": str(client.root), "stars": 4}).get_json()
+    assert c["photos"] == []
+    assert client.get("/api/ratings/summary", query_string={"root": str(client.root)}).get_json()["counts"]["4"] == 0
+
+
+def test_ratings_prefix_does_not_match_sibling_folder(client, tmp_path):
+    tok = {"X-Token": client.mod.TOKEN}
+    sib = client.root.parent / (client.root.name + "_백업")
+    sib.mkdir()
+    Image.new("RGB", (8, 8)).save(sib / "x.jpg")
+    client.post("/api/rating", json={"paths": [str(sib / "x.jpg")], "stars": 5}, headers=tok)
+    assert client.get("/api/ratings/summary", query_string={"root": str(client.root)}).get_json()["counts"]["5"] == 0

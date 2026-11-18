@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import secrets
+import sqlite3
 import string
 import sys
 import threading
@@ -40,7 +41,8 @@ STATIC_DIR = BASE_DIR / "static"
 DATA_DIR = Path(os.environ.get("PHOTO_CLEANER_HOME", Path.home() / ".photo-cleaner"))
 CACHE_DIR = Path(os.environ.get("PHOTO_CLEANER_CACHE", DATA_DIR / "cache"))
 SETTINGS_FILE = DATA_DIR / "settings.json"
-DEFAULT_SETTINGS = {"root": None, "folder": None, "photo": None, "view": "single", "nup": 2, "gridSize": "m", "sidebar": True, "smooth": 2}
+RATINGS_DB = DATA_DIR / "ratings.db"
+DEFAULT_SETTINGS = {"root": None, "folder": None, "photo": None, "view": "single", "nup": 2, "gridSize": "m", "sidebar": True, "smooth": 2, "defaultStars": 3}
 
 # 미리보기를 만들 수 있는 형식
 VIEWABLE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
@@ -105,6 +107,58 @@ def has_subdirs(folder: Path) -> bool:
     except OSError:
         pass
     return False
+
+
+# ---------------------------------------------------------------- 별점 저장소
+# 사진 파일은 건드리지 않고 별점만 따로 기록한다. key는 대소문자/구분자를 정리한 경로.
+
+def rkey(path: str) -> str:
+    return os.path.normcase(os.path.normpath(str(path)))
+
+
+def ratings_db() -> sqlite3.Connection:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(RATINGS_DB, timeout=10)
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS ratings ("
+        " key TEXT PRIMARY KEY, path TEXT NOT NULL, dir TEXT NOT NULL,"
+        " stars INTEGER NOT NULL, updated TEXT NOT NULL)"
+    )
+    con.execute("CREATE INDEX IF NOT EXISTS ratings_dir ON ratings(dir)")
+    return con
+
+
+def ratings_in_dir(folder: Path) -> dict:
+    with ratings_db() as con:
+        rows = con.execute("SELECT key, stars FROM ratings WHERE dir = ?", (rkey(folder),)).fetchall()
+    return dict(rows)
+
+
+def like_prefix(root: str) -> str:
+    """root 아래 모든 경로에 맞는 LIKE 패턴 (%, _ 는 이스케이프)."""
+    k = rkey(root)
+    if not k.endswith(os.sep):
+        k += os.sep
+    return k.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def remove_ratings(paths: list[str]) -> None:
+    if not paths:
+        return
+    with ratings_db() as con:
+        con.executemany("DELETE FROM ratings WHERE key = ?", [(rkey(p),) for p in paths])
+
+
+def photo_entry(path: str, st: os.stat_result, rating: int = 0) -> dict:
+    name = os.path.basename(path)
+    return {
+        "name": name,
+        "path": path,
+        "size": st.st_size,
+        "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+        "viewable": Path(name).suffix.lower() in VIEWABLE_EXT,
+        "rating": rating,
+    }
 
 
 def load_settings() -> dict:
@@ -315,21 +369,77 @@ def api_photos():
     folder = safe_path(request.args.get("path"))
     if not folder.is_dir():
         abort(400, "폴더가 아닙니다")
-    photos = []
     with os.scandir(folder) as it:
         entries = [e for e in it if e.is_file(follow_symlinks=False) and is_photo(e.name)]
-    for e in sorted(entries, key=lambda e: e.name.lower()):
-        st = e.stat()
-        photos.append(
-            {
-                "name": e.name,
-                "path": e.path,
-                "size": st.st_size,
-                "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
-                "viewable": Path(e.name).suffix.lower() in VIEWABLE_EXT,
-            }
-        )
+    stars = ratings_in_dir(folder)
+    photos = [photo_entry(e.path, e.stat(), stars.get(rkey(e.path), 0)) for e in sorted(entries, key=lambda e: e.name.lower())]
     return jsonify(path=str(folder), photos=photos)
+
+
+@app.post("/api/rating")
+def api_rating():
+    """별점 매기기. stars 0 = 별점 지우기(기본 별점으로 돌아감)."""
+    data = request.get_json(silent=True) or {}
+    paths, stars = data.get("paths") or [], data.get("stars")
+    if not isinstance(paths, list) or not paths or stars not in (0, 1, 2, 3, 4, 5):
+        abort(400, "잘못된 별점 요청입니다")
+    now = datetime.now().isoformat(timespec="seconds")
+    rows = []
+    for raw in paths:
+        p = Path(str(raw))
+        if not p.is_absolute() or not p.is_file() or not is_photo(p.name):
+            abort(400, f"사진 파일이 아닙니다: {raw}")
+        rows.append((rkey(p), str(p), rkey(p.parent), stars, now))
+    with ratings_db() as con:
+        if stars == 0:
+            con.executemany("DELETE FROM ratings WHERE key = ?", [(r[0],) for r in rows])
+        else:
+            con.executemany(
+                "INSERT INTO ratings(key, path, dir, stars, updated) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET path=excluded.path, dir=excluded.dir, stars=excluded.stars, updated=excluded.updated",
+                rows,
+            )
+    return jsonify(ok=True, stars=stars, count=len(rows))
+
+
+@app.get("/api/ratings/summary")
+def api_ratings_summary():
+    """root 아래에서 별점을 매긴 사진 수 (별점별)."""
+    root = safe_path(request.args.get("root"))
+    with ratings_db() as con:
+        rows = con.execute(
+            "SELECT stars, COUNT(*) FROM ratings WHERE key LIKE ? ESCAPE '\\' GROUP BY stars", (like_prefix(str(root)),)
+        ).fetchall()
+    counts = {str(n): 0 for n in range(1, 6)}
+    counts.update({str(k): v for k, v in rows})
+    return jsonify(root=str(root), counts=counts)
+
+
+@app.get("/api/ratings/collect")
+def api_ratings_collect():
+    """root 아래에서 같은 별점의 사진을 모두 모은다. 없어진 파일은 기록에서 지운다."""
+    root = safe_path(request.args.get("root"))
+    try:
+        stars = int(request.args.get("stars", ""))
+    except ValueError:
+        abort(400, "stars가 필요합니다")
+    with ratings_db() as con:
+        rows = con.execute(
+            "SELECT path FROM ratings WHERE stars = ? AND key LIKE ? ESCAPE '\\' ORDER BY path",
+            (stars, like_prefix(str(root))),
+        ).fetchall()
+    photos, missing = [], []
+    for (path,) in rows:
+        try:
+            st = os.stat(path)
+        except OSError:
+            missing.append(path)
+            continue
+        e = photo_entry(path, st, stars)
+        e["dir"] = os.path.basename(os.path.dirname(path))
+        photos.append(e)
+    remove_ratings(missing)
+    return jsonify(root=str(root), stars=stars, photos=photos)
 
 
 @app.get("/api/thumb")
@@ -404,6 +514,7 @@ def api_delete():
             done.append({"path": str(p), "size": size})
         except Exception as ex:  # 한 장이 실패해도 나머지는 계속
             failed.append({"path": str(raw), "error": str(ex)})
+    remove_ratings([d["path"] for d in done])
     return jsonify(deleted=done, failed=failed, freed=sum(d["size"] for d in done))
 
 

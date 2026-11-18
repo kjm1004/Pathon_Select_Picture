@@ -27,6 +27,10 @@
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
       폴더 열기
     </button>
+    <button id="settings-btn" class="btn btn-sm" title="설정">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      설정
+    </button>
     <span id="path-label" class="muted path-label"></span>
   </header>
 
@@ -39,6 +43,11 @@
           <input id="folder-search" type="text" placeholder="예: 2024-03, 제주" autocomplete="off">
         </div>
       </div>
+      <div class="collect" aria-label="별점 모아 보기">
+        <div class="collect-head">별점 모아 보기 <span class="muted">(드라이브 전체)</span></div>
+        <div id="collect"></div>
+      </div>
+      <div class="tree-head">폴더</div>
       <div id="tree" class="tree scrolly" role="tree"></div>
     </nav>
 
@@ -60,6 +69,10 @@
           <button id="view-multi" data-view="multi" aria-pressed="false">나란히</button>
           <button id="view-grid" data-view="grid" aria-pressed="false">바둑판</button>
         </div>
+        <label id="rfilter-wrap" class="opt" title="별점으로 거르기">
+          <span>별점</span>
+          <select id="rfilter"></select>
+        </label>
         <label id="nup-wrap" class="opt" hidden>
           <span>장 수</span>
           <select id="nup">
@@ -85,7 +98,7 @@
           전체 화면
         </button>
         <span class="spacer"></span>
-        <span class="muted hint">휠 ← → 이동 · Space 삭제 표시 · Ctrl+휠 확대 · F 전체 화면 · B 메뉴</span>
+        <span class="muted hint">휠 이동 · 1~5 별점 · Space 삭제 표시 · Ctrl+휠 확대 · F 전체 화면</span>
         <span id="pos" class="muted tabnum"></span>
       </div>
 
@@ -116,9 +129,10 @@
               <span id="info-meta" class="muted"></span>
             </div>
             <span class="spacer"></span>
+            <div id="stars" class="stars big-stars" role="group" aria-label="별점 (1~5 키, 0 지우기)"></div>
             <div class="zoomctl" role="group" aria-label="확대/축소">
               <button id="zoom-out" aria-label="축소 (-)">−</button>
-              <button id="zoom-label" class="zlabel" title="창에 맞춤 (0)">맞춤</button>
+              <button id="zoom-label" class="zlabel" title="창에 맞춤 (Z)">맞춤</button>
               <button id="zoom-in" aria-label="확대 (+)">+</button>
             </div>
             <button id="toggle-btn" class="toggle-btn">삭제 표시</button>
@@ -156,6 +170,30 @@
     </div>
   </div>
 
+  <div id="settings" class="overlay" hidden>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="set-title">
+      <h2 id="set-title">설정</h2>
+      <label class="set-row">
+        <span><strong>기본 별점</strong><br><span class="muted">별점을 매기지 않은 사진을 이 별점으로 취급합니다</span></span>
+        <select id="set-default">
+          <option value="0">없음</option><option value="1">★1</option><option value="2">★2</option>
+          <option value="3">★3</option><option value="4">★4</option><option value="5">★5</option>
+        </select>
+      </label>
+      <label class="set-row">
+        <span><strong>전환 부드럽기</strong><br><span class="muted">사진이 바뀔 때와 화면이 움직일 때의 속도</span></span>
+        <select id="set-smooth">
+          <option value="0">끄기</option><option value="1">빠르게</option><option value="2">보통</option>
+          <option value="3">느리게</option><option value="4">아주 느리게</option>
+        </select>
+      </label>
+      <div class="set-keys muted">
+        단축키: 휠 이전/다음 · 1~5 별점 · 0 별점 지우기 · Space 삭제 표시 · Ctrl+휠 확대 · Z 맞춤 · F 전체 화면 · B 좌측 메뉴
+      </div>
+      <div class="dlg-actions"><button id="set-close" class="btn">닫기</button></div>
+    </div>
+  </div>
+
   <div id="fs" class="fs" role="dialog" aria-modal="true" aria-label="전체 화면 보기" hidden>
     <div id="fs-stage" class="fs-stage">
       <img id="fs-img" alt="">
@@ -171,9 +209,10 @@
       <span id="fs-pos" class="tabnum"></span>
       <span id="fs-name" class="fs-name"></span>
       <span class="spacer"></span>
+      <div id="fs-stars" class="stars big-stars" role="group" aria-label="별점 (1~5 키, 0 지우기)"></div>
       <div class="zoomctl" role="group" aria-label="확대/축소">
               <button id="fs-zoom-out" aria-label="축소 (-)">−</button>
-              <button id="fs-zoom-label" class="zlabel" title="창에 맞춤 (0)">맞춤</button>
+              <button id="fs-zoom-label" class="zlabel" title="창에 맞춤 (Z)">맞춤</button>
               <button id="fs-zoom-in" aria-label="확대 (+)">+</button>
             </div>
       <button id="fs-toggle" class="toggle-btn">삭제 표시</button>
