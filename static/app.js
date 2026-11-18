@@ -518,7 +518,8 @@
 
   // ------------------------------------------------------------ 사진 속성 창
   const appEl = document.querySelector('.app');
-  const infoShown = () => !appEl.classList.contains('no-info');
+  // 평소에는 [속성] 상태, 전체 화면에서는 오른쪽 끝에서 꺼냈을 때
+  const infoShown = () => (appEl.classList.contains('fs-mode') ? appEl.classList.contains('reveal-right') : !appEl.classList.contains('no-info'));
   function setInfoPanel(show, save = true) {
     appEl.classList.toggle('no-info', !show);
     $('info-btn').setAttribute('aria-pressed', show);
@@ -527,7 +528,7 @@
     if (save) saveSettings({ infoPanel: show });
   }
   $('info-btn').addEventListener('click', () => setInfoPanel(!infoShown()));
-  $('ip-close').addEventListener('click', () => setInfoPanel(false));
+  $('ip-close').addEventListener('click', () => (appEl.classList.contains('fs-mode') ? appEl.classList.remove('reveal-right') : setInfoPanel(false)));
 
   let ipFor, ipTimer = null;
   const histCache = new Map();
@@ -784,7 +785,8 @@
       if (n.open && (clickedChevron || n.path === state.folder)) { n.open = false; renderTree(); }
       else expand(n);
     }
-    if (!clickedChevron) openFolder(n.path);
+    // 전체 화면에서는 사진이 없는 폴더(연도 폴더 등)는 펼치기만 한다 (빈 폴더를 열면 전체 화면이 닫히므로)
+    if (!clickedChevron && !(state.fs && !n.count)) openFolder(n.path);
   });
 
   $('folder-search').addEventListener('input', (e) => { state.q = e.target.value.trim().toLowerCase(); renderTree(); });
@@ -1112,6 +1114,7 @@
     state.fs = true;
     fsFor = null;
     $('fs').hidden = false;
+    appEl.classList.add('fs-mode');
     if (desktop()) window.pywebview.api.set_fullscreen(true).catch(() => {});
     else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
     renderAll();
@@ -1120,6 +1123,8 @@
   function closeFs() {
     state.fs = false;
     $('fs').hidden = true;
+    appEl.classList.remove('fs-mode', 'reveal-left', 'reveal-right');
+    ipFor = undefined;
     if (desktop()) window.pywebview.api.set_fullscreen(false).catch(() => {});
     else if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     renderAll();
@@ -1179,6 +1184,35 @@
       noprev.textContent = `${extOf(p.name)} 파일은 미리보기를 지원하지 않습니다`;
     }
   }
+
+  // ------------------------------------------------------------ 전체 화면: 화면 끝 메뉴
+  // 마우스가 왼쪽 끝에 닿으면 폴더 메뉴, 오른쪽 끝에 닿으면 속성 창. 창에서 벗어나면 숨긴다.
+  const EDGE = 6;
+  const hideTimer = { left: null, right: null };
+  function reveal(side, on) {
+    const cls = side === 'left' ? 'reveal-left' : 'reveal-right';
+    clearTimeout(hideTimer[side]);
+    if (on) {
+      if (!appEl.classList.contains(cls)) {
+        appEl.classList.add(cls);
+        if (side === 'right') { ipFor = undefined; scheduleInfoPanel(); }
+      }
+    } else if (appEl.classList.contains(cls)) {
+      hideTimer[side] = setTimeout(() => appEl.classList.remove(cls), 250);   // 살짝 벗어난 경우는 바로 닫지 않음
+    }
+  }
+  document.addEventListener('mousemove', (e) => {
+    if (!state.fs) return;
+    const x = e.clientX, w = window.innerWidth;
+    const leftW = document.querySelector('.sidebar').offsetWidth || 300;
+    const rightW = $('infopanel').offsetWidth || 300;
+    if (x <= EDGE) reveal('left', true);
+    else if (appEl.classList.contains('reveal-left')) reveal('left', x <= leftW + 16);
+    if (x >= w - 1 - EDGE) reveal('right', true);
+    else if (appEl.classList.contains('reveal-right')) reveal('right', x >= w - rightW - 16);
+  }, { passive: true });
+  // 마우스가 창 밖으로 나가면 닫기
+  document.addEventListener('mouseleave', () => { if (state.fs) { reveal('left', false); reveal('right', false); } });
 
   // ------------------------------------------------------------ 그리기
   function markedPhotos() {

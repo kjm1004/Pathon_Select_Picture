@@ -55,37 +55,6 @@
       <div id="tree" class="tree scrolly" role="tree"></div>
     </nav>
 
-    <aside id="infopanel" class="infopanel scrolly" aria-label="사진 속성">
-      <div class="ip-head">
-        <strong>사진 속성</strong>
-        <button id="ip-close" class="icon-btn icon-sm" aria-label="속성 창 닫기 (P)" title="닫기 (P)">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-        </button>
-      </div>
-      <p id="ip-empty" class="muted ip-empty">사진을 선택하면 속성이 표시됩니다</p>
-      <div id="ip-body" hidden>
-        <section class="ip-sec">
-          <h3>파일</h3>
-          <dl id="ip-file" class="ip-dl"></dl>
-        </section>
-        <section class="ip-sec">
-          <h3>히스토그램</h3>
-          <canvas id="ip-hist" class="ip-hist" width="512" height="200" role="img" aria-label="RGB 히스토그램"></canvas>
-          <div class="ip-legend"><span class="lr">R</span><span class="lg">G</span><span class="lb">B</span><span class="ll">밝기</span></div>
-          <p id="ip-hist-msg" class="muted ip-small" hidden></p>
-        </section>
-        <section class="ip-sec">
-          <h3>촬영 정보</h3>
-          <dl id="ip-shot" class="ip-dl"></dl>
-          <p id="ip-shot-none" class="muted ip-small" hidden>촬영 정보(EXIF)가 없습니다</p>
-        </section>
-        <section class="ip-sec">
-          <h3>위치</h3>
-          <div id="ip-gps"></div>
-        </section>
-      </div>
-    </aside>
-
     <main class="content">
       <section id="index" class="index" aria-label="사진 인덱스 (파란 테두리: 현재 사진, 주황 테두리: 삭제 표시)">
         <div id="strip" class="strip scrollx"></div>
@@ -186,6 +155,37 @@
         </button>
       </div>
     </main>
+
+    <aside id="infopanel" class="infopanel scrolly" aria-label="사진 속성">
+      <div class="ip-head">
+        <strong>사진 속성</strong>
+        <button id="ip-close" class="icon-btn icon-sm" aria-label="속성 창 닫기 (P)" title="닫기 (P)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <p id="ip-empty" class="muted ip-empty">사진을 선택하면 속성이 표시됩니다</p>
+      <div id="ip-body" hidden>
+        <section class="ip-sec">
+          <h3>파일</h3>
+          <dl id="ip-file" class="ip-dl"></dl>
+        </section>
+        <section class="ip-sec">
+          <h3>히스토그램</h3>
+          <canvas id="ip-hist" class="ip-hist" width="512" height="200" role="img" aria-label="RGB 히스토그램"></canvas>
+          <div class="ip-legend"><span class="lr">R</span><span class="lg">G</span><span class="lb">B</span><span class="ll">밝기</span></div>
+          <p id="ip-hist-msg" class="muted ip-small" hidden></p>
+        </section>
+        <section class="ip-sec">
+          <h3>촬영 정보</h3>
+          <dl id="ip-shot" class="ip-dl"></dl>
+          <p id="ip-shot-none" class="muted ip-small" hidden>촬영 정보(EXIF)가 없습니다</p>
+        </section>
+        <section class="ip-sec">
+          <h3>위치</h3>
+          <div id="ip-gps"></div>
+        </section>
+      </div>
+    </aside>
   </div>
 
   <div id="dialog" class="overlay" hidden>
@@ -242,6 +242,8 @@
     </div>
     <button id="fs-prev" class="nav-btn fs-nav fs-left" aria-label="이전 사진"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#E6E8EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
     <button id="fs-next" class="nav-btn fs-nav fs-right" aria-label="다음 사진"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#E6E8EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
+    <div class="fs-edge left" aria-hidden="true"></div>
+    <div class="fs-edge right" aria-hidden="true"></div>
     <div class="fs-bar">
       <span id="fs-pos" class="tabnum"></span>
       <span id="fs-name" class="fs-name"></span>
