@@ -430,7 +430,12 @@
     el.addEventListener('click', (e) => { if (suppressClick) { e.stopPropagation(); e.preventDefault(); } }, true);
     el.addEventListener('dblclick', (e) => { if (suppressClick) { e.stopPropagation(); e.preventDefault(); } }, true);
 
-    return { animateTo, stop, get busy() { return !!anim || !!(drag && drag.moving); }, get target() { return anim ? anim.dest : el.scrollLeft; } };
+    return {
+      animateTo, stop,
+      get busy() { return !!anim || !!(drag && drag.moving); },
+      get dragging() { return !!(drag && drag.moving); },
+      get target() { return anim ? anim.dest : el.scrollLeft; },
+    };
   }
 
   // ------------------------------------------------------------ 시작
@@ -733,14 +738,18 @@
   function ensureMultiVisible(instant = false) {
     const box = $('multi');
     const pitch = multiPitch();
-    if (!pitch || multiKinetic.busy) return;
+    // 손으로 끄는 중일 때만 건드리지 않는다. 움직이는 중이면 목적지를 기준으로 다시 맞춘다
+    // (예전에는 이동 중에 누른 화살표를 무시해서 두 번 눌러야 하는 경우가 있었다)
+    if (!pitch || multiKinetic.dragging) return;
     const n = Math.min(state.nup, state.photos.length);
-    const first = Math.round(box.scrollLeft / pitch);
+    const goal = multiKinetic.target;
+    const first = Math.round(goal / pitch);
     let dest = null;
     if (state.focus < first) dest = state.focus * pitch;
     else if (state.focus > first + n - 1) dest = (state.focus - n + 1) * pitch;
-    else if (Math.abs(box.scrollLeft - first * pitch) > 1) dest = first * pitch;  // 칸에 맞춤
+    else if (Math.abs(goal - first * pitch) > 1) dest = first * pitch;  // 칸에 맞춤
     if (dest === null) return;
+    if (multiKinetic.busy && Math.abs(multiKinetic.target - dest) < 1) return;  // 이미 그쪽으로 가는 중
     if (instant) box.scrollLeft = dest; else multiKinetic.animateTo(dest, 160);
   }
 
@@ -1143,7 +1152,9 @@
       return;
     }
     const t = ev.target;
-    if (t.matches('input[type=text], select, textarea')) return;
+    // 선택 상자에 포커스가 남아 있어도 ← → 는 사진 이동 (상자 값이 바뀌지 않게)
+    if (t.matches('select') && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) t.blur();
+    else if (t.matches('input[type=text], select, textarea')) return;
     const step = state.view === 'multi' ? state.nup : 1;
     if (ev.key === 'ArrowRight') { ev.preventDefault(); setFocus(state.focus + 1); }
     else if (ev.key === 'ArrowLeft') { ev.preventDefault(); setFocus(state.focus - 1); }
