@@ -16,6 +16,7 @@
     view: 'single',        // single | multi | grid
     nup: 2,                // 나란히 보기 장 수
     gridSize: 'm',
+    smooth: 2,             // 전환 부드럽기 0(끄기)~4(아주 느리게)
     fs: false,             // 전체 화면 보기
     marks: new Map(),      // folderPath -> Set(photoPath)
     info: new Map(),
@@ -159,14 +160,65 @@
     hi.src = `/api/original?path=${encodeURIComponent(path)}`;
   }
 
+  // ------------------------------------------------------------ 전환 부드럽기
+  // dur: 사진 바뀌는 시간(ms), slide: 밀리는 거리(px), gap: 휠로 넘기는 최소 간격(ms), move: 스크롤 이동 시간 배율
+  const SMOOTH = [
+    { dur: 0, slide: 0, gap: 120, move: 0.6 },     // 끄기
+    { dur: 180, slide: 24, gap: 170, move: 0.8 },  // 빠르게
+    { dur: 300, slide: 36, gap: 260, move: 1 },    // 보통
+    { dur: 460, slide: 48, gap: 380, move: 1.4 },  // 느리게
+    { dur: 680, slide: 60, gap: 540, move: 1.9 },  // 아주 느리게
+  ];
+  const smooth = () => SMOOTH[state.smooth] || SMOOTH[2];
+  const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // 사진 교체 효과: 이전 사진(복사본)은 dir 반대쪽으로 밀리며 사라지고, 새 사진은 dir 쪽에서 나타난다
+  function slideSwap(img, dir) {
+    const cfg = smooth();
+    img.parentNode.querySelectorAll('.ghost').forEach((g) => g.remove());
+    if (!cfg.dur || img.hidden || !img.getAttribute('src')) return;
+    const ghost = img.cloneNode(false);
+    ghost.removeAttribute('id');
+    ghost.classList.add('ghost');
+    img.after(ghost);
+    const slide = reducedMotion ? 0 : cfg.slide * (dir || 0);
+    const op = parseFloat(getComputedStyle(img).opacity) || 1;
+    const base = ghost.style.transform || '';
+    ghost.animate(
+      [{ opacity: op, transform: `translateX(0px) ${base}` }, { opacity: 0, transform: `translateX(${-slide}px) ${base}` }],
+      { duration: cfg.dur, easing: 'cubic-bezier(.2,.7,.3,1)', fill: 'forwards' },
+    ).onfinish = () => ghost.remove();
+    img.animate(
+      [{ opacity: 0, transform: `translateX(${slide}px)` }, { opacity: op, transform: 'translateX(0px)' }],
+      { duration: cfg.dur, easing: 'cubic-bezier(.2,.7,.3,1)' },
+    );
+  }
+
+  // 큰 사진을 미리 받아 두어 넘길 때 흐린 사진이 먼저 보이지 않게 한다
+  const loadedUrls = new Set();
+  function preload(url) {
+    if (loadedUrls.has(url)) return;
+    const im = new Image();
+    im.onload = () => loadedUrls.add(url);
+    im.src = url;
+  }
+  function preloadAround(size) {
+    for (const k of [1, -1, 2, -2]) {
+      const p = state.photos[state.focus + k];
+      if (p && p.viewable) preload(thumbUrl(p.path, size));
+    }
+  }
+
   // ------------------------------------------------------------ 휠 / 던지기
   // 휠 한 칸(또는 터치패드로 일정량)마다 dir(+1/-1)을 한 번 알려 준다
   function wheelStepper(fn) {
-    let acc = 0;
+    let acc = 0, last = 0;
     return (e) => {
       const d = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * (e.deltaMode === 1 ? 40 : 1);
+      const now = performance.now();
+      if (now - last < smooth().gap) { acc = 0; return; }   // 너무 빨리 넘어가지 않도록
       acc += d;
-      if (Math.abs(acc) >= 50) { const dir = Math.sign(acc); acc = 0; fn(dir); }
+      if (Math.abs(acc) >= 50) { const dir = Math.sign(acc); acc = 0; last = now; fn(dir); }
     };
   }
 
@@ -186,7 +238,8 @@
       stop();
       const dist = dest - start;
       if (Math.abs(dist) < 0.5) { el.scrollLeft = dest; if (opts.onSettle) opts.onSettle(); return; }
-      const dur = Math.min(base * 2.5, base + Math.abs(dist) * 0.25);
+      const mul = smooth().move;
+      const dur = Math.min(base * 2.5, base + Math.abs(dist) * 0.25) * mul;
       anim = { dest };
       const step = (now) => {
         const t = Math.min(1, (now - t0) / dur);
@@ -264,6 +317,8 @@
     state.nup = [2, 3, 4, 5, 6, 8].includes(+settings.nup) ? +settings.nup : 2;
     state.gridSize = ['s', 'm', 'l'].includes(settings.gridSize) ? settings.gridSize : 'm';
     setSidebar(settings.sidebar !== false, false);
+    state.smooth = [0, 1, 2, 3, 4].includes(+settings.smooth) ? +settings.smooth : 2;
+    $('smooth').value = String(state.smooth);
     $('nup').value = String(state.nup);
     $('gsize').value = state.gridSize;
     applyViewButtons();
@@ -615,10 +670,14 @@
   }
 
   // ------------------------------------------------------------ 상태 변경
+  let navDir = 0;   // 직전 이동 방향 (+1 다음, -1 이전) — 전환 효과 방향
   function setFocus(i, scroll = true) {
     if (!state.photos.length) return;
-    state.focus = Math.max(0, Math.min(state.photos.length - 1, i));
+    const next = Math.max(0, Math.min(state.photos.length - 1, i));
+    navDir = Math.sign(next - state.focus);
+    state.focus = next;
     renderAll();
+    navDir = 0;
     const p = state.photos[state.focus];
     if (p) saveSettings({ photo: p.name });
     if (scroll) {
@@ -655,6 +714,7 @@
   }
   document.querySelectorAll('.seg [data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
   $('nup').addEventListener('change', (e) => { e.target.blur(); state.nup = +e.target.value; sizeMulti(); multiKinetic.stop(); renderAll(); ensureMultiVisible(true); saveSettings({ nup: state.nup }); });
+  $('smooth').addEventListener('change', (e) => { e.target.blur(); state.smooth = +e.target.value; saveSettings({ smooth: state.smooth }); });
   $('gsize').addEventListener('change', (e) => { e.target.blur(); state.gridSize = e.target.value; applyViewButtons(); saveSettings({ gridSize: state.gridSize }); });
 
   $('prev').addEventListener('click', () => setFocus(state.focus - 1));
@@ -722,10 +782,10 @@
     const mk = m.has(p.path);
     $('fs-stage').classList.toggle('marked', mk);
     if (fsFor !== p.path) {
+      if (fsFor && navDir) slideSwap($('fs-img'), navDir);
       fsFor = p.path;
       showImage($('fs-img'), $('fs-noprev'), p, 'x');
-      const nx = state.photos[state.focus + 1];
-      if (nx && nx.viewable) { const pre = new Image(); pre.src = thumbUrl(nx.path, 'x'); }
+      preloadAround('x');
     }
     $('fs-pos').textContent = `${state.focus + 1} / ${state.photos.length}`;
     $('fs-name').textContent = p.name;
@@ -743,11 +803,13 @@
     if (p.viewable) {
       img.hidden = false; noprev.hidden = true;
       img.alt = p.name;
+      img.dataset.want = p.path;
+      const bigUrl = thumbUrl(p.path, size);
+      if (loadedUrls.has(bigUrl)) { img.src = bigUrl; return; }
       img.src = thumbUrl(p.path, 'm');
       const big = new Image();
-      big.onload = () => { if (img.dataset.want === p.path && img.dataset.orig !== p.path) img.src = big.src; };
-      img.dataset.want = p.path;
-      big.src = thumbUrl(p.path, size);
+      big.onload = () => { loadedUrls.add(bigUrl); if (img.dataset.want === p.path && img.dataset.orig !== p.path) img.src = big.src; };
+      big.src = bigUrl;
     } else {
       img.hidden = true; noprev.hidden = false;
       img.removeAttribute('src');
@@ -803,10 +865,10 @@
     const mk = m.has(p.path);
     $('big').classList.toggle('marked', mk);
     if (bigFor !== p.path) {
+      if (bigFor && navDir) slideSwap($('big-img'), navDir);
       bigFor = p.path;
       showImage($('big-img'), $('big-noprev'), p, 'l');
-      const nx = state.photos[state.focus + 1];
-      if (nx && nx.viewable) { const pre = new Image(); pre.src = thumbUrl(nx.path, 'l'); }
+      preloadAround('l');
       loadInfo(p);
     }
     $('info-name').textContent = p.name;
