@@ -262,6 +262,37 @@ button { cursor: pointer; }
 .actionbar .btn { height: 30px; padding: 0 12px; }
 .actionbar .btn-danger { height: 30px; padding: 0 14px; font-size: 13px; }
 
+/* ---------- 인덱스 크기 ---------- */
+.app { --ixw: 60px; --ixh: 42px; }
+.app.ix-s { --ixw: 46px; --ixh: 32px; }
+.app.ix-l { --ixw: 88px; --ixh: 62px; }
+.app.ix-xl { --ixw: 124px; --ixh: 88px; }
+.ix { width: var(--ixw); }
+.ix .th { height: var(--ixh); }
+.app.ix-s .ix .num { font-size: 9px; line-height: 11px; }
+.app.ix-l .ix .num, .app.ix-xl .ix .num { font-size: 11px; line-height: 15px; }
+
+/* ---------- 사진 속성 창 ---------- */
+.infopanel { flex: 0 0 290px; width: 290px; min-height: 0; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 8px 12px 16px; }
+.app.no-info .infopanel { display: none; }
+#info-btn[aria-pressed="true"] { color: var(--blue-t); border-color: #35507A; }
+.ip-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.ip-empty { margin: 16px 0; }
+.ip-sec { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.ip-sec h3 { margin: 0 0 8px; font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .04em; }
+.ip-dl { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 5px 10px; margin: 0; font-size: 12px; }
+.ip-dl dt { color: var(--muted); }
+.ip-dl dd { margin: 0; color: var(--text); word-break: break-all; }
+.ip-small { font-size: 12px; margin: 4px 0 0; }
+.ip-hist { width: 100%; height: 110px; background: #0B0C0E; border: 1px solid var(--line); border-radius: 6px; display: block; }
+.ip-legend { display: flex; gap: 10px; margin-top: 4px; font-size: 11px; color: var(--muted); }
+.ip-legend span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: 0; }
+.ip-legend .lr::before { background: #E5484D; } .ip-legend .lg::before { background: #46A758; }
+.ip-legend .lb::before { background: #3E7BFA; } .ip-legend .ll::before { background: #C9CED4; }
+.ip-map { width: 100%; height: 200px; border: 1px solid var(--line); border-radius: 6px; background: #0B0C0E; display: block; margin-top: 8px; }
+.ip-links { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.ip-links .btn { height: 28px; padding: 0 10px; font-size: 12px; }
+
 @media (max-width: 700px) {
   .body { flex-wrap: wrap; overflow: auto; }
   .sidebar { flex: 1 1 100%; width: auto; }

@@ -27,6 +27,10 @@
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
       폴더 열기
     </button>
+    <button id="info-btn" class="btn btn-sm" aria-pressed="false" title="사진 속성 창 숨기기/보이기 (P)">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
+      속성
+    </button>
     <button id="settings-btn" class="btn btn-sm" title="설정">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
       설정
@@ -50,6 +54,37 @@
       <div class="tree-head">폴더</div>
       <div id="tree" class="tree scrolly" role="tree"></div>
     </nav>
+
+    <aside id="infopanel" class="infopanel scrolly" aria-label="사진 속성">
+      <div class="ip-head">
+        <strong>사진 속성</strong>
+        <button id="ip-close" class="icon-btn icon-sm" aria-label="속성 창 닫기 (P)" title="닫기 (P)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <p id="ip-empty" class="muted ip-empty">사진을 선택하면 속성이 표시됩니다</p>
+      <div id="ip-body" hidden>
+        <section class="ip-sec">
+          <h3>파일</h3>
+          <dl id="ip-file" class="ip-dl"></dl>
+        </section>
+        <section class="ip-sec">
+          <h3>히스토그램</h3>
+          <canvas id="ip-hist" class="ip-hist" width="512" height="200" role="img" aria-label="RGB 히스토그램"></canvas>
+          <div class="ip-legend"><span class="lr">R</span><span class="lg">G</span><span class="lb">B</span><span class="ll">밝기</span></div>
+          <p id="ip-hist-msg" class="muted ip-small" hidden></p>
+        </section>
+        <section class="ip-sec">
+          <h3>촬영 정보</h3>
+          <dl id="ip-shot" class="ip-dl"></dl>
+          <p id="ip-shot-none" class="muted ip-small" hidden>촬영 정보(EXIF)가 없습니다</p>
+        </section>
+        <section class="ip-sec">
+          <h3>위치</h3>
+          <div id="ip-gps"></div>
+        </section>
+      </div>
+    </aside>
 
     <main class="content">
       <section id="index" class="index" aria-label="사진 인덱스 (파란 테두리: 현재 사진, 주황 테두리: 삭제 표시)">
@@ -177,6 +212,12 @@
         </select>
       </label>
       <label class="set-row">
+        <span><strong>인덱스 크기</strong><br><span class="muted">상단 인덱스 썸네일의 크기</span></span>
+        <select id="set-ixsize">
+          <option value="s">작게</option><option value="m">보통</option><option value="l">크게</option><option value="xl">아주 크게</option>
+        </select>
+      </label>
+      <label class="set-row">
         <span><strong>전환 부드럽기</strong><br><span class="muted">사진이 바뀔 때와 화면이 움직일 때의 속도</span></span>
         <select id="set-smooth">
           <option value="0">끄기</option><option value="1">빠르게</option><option value="2">보통</option>
@@ -184,7 +225,7 @@
         </select>
       </label>
       <div class="set-keys muted">
-        단축키: 휠/← → 이전·다음 · 1~5 별점 · 0 별점 지우기 · Space 삭제 표시 · Ctrl+휠 확대 · Z 맞춤 · F 전체 화면 · B 좌측 메뉴 · I 인덱스<br>인덱스: 파란 테두리 = 현재 사진, 주황 테두리 = 삭제 표시
+        단축키: 휠/← → 이전·다음 · 1~5 별점 · 0 별점 지우기 · Space 삭제 표시 · Ctrl+휠 확대 · Z 맞춤 · F 전체 화면 · B 좌측 메뉴 · I 인덱스 · P 속성 창<br>인덱스: 파란 테두리 = 현재 사진, 주황 테두리 = 삭제 표시
       </div>
       <div class="dlg-actions"><button id="set-close" class="btn">닫기</button></div>
     </div>

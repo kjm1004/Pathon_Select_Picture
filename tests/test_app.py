@@ -140,3 +140,45 @@ def test_ratings_prefix_does_not_match_sibling_folder(client, tmp_path):
     Image.new("RGB", (8, 8)).save(sib / "x.jpg")
     client.post("/api/rating", json={"paths": [str(sib / "x.jpg")], "stars": 5}, headers=tok)
     assert client.get("/api/ratings/summary", query_string={"root": str(client.root)}).get_json()["counts"]["5"] == 0
+
+
+def _jpeg_with_exif(path, gps=True):
+    from PIL import Image as Im
+    from PIL.TiffImagePlugin import IFDRational as R
+
+    im = Im.new("RGB", (120, 80), (200, 40, 40))
+    ex = im.getexif()
+    ex[0x010F] = "Canon"
+    ex[0x0110] = "Canon EOS R6"
+    sub = ex.get_ifd(0x8769)
+    sub[0x829A] = R(1, 250)      # 노출 1/250
+    sub[0x829D] = R(28, 10)      # f/2.8
+    sub[0x8827] = 400            # ISO
+    sub[0x920A] = R(50, 1)       # 50mm
+    sub[0x9003] = "2024:03:16 10:20:30"
+    sub[0xA434] = "RF50mm F1.8 STM"
+    if gps:
+        g = ex.get_ifd(0x8825)
+        g[1], g[2] = "N", (R(33, 1), R(30, 1), R(0, 1))     # 33.5
+        g[3], g[4] = "E", (R(126, 1), R(31, 1), R(48, 1))   # 126.53
+    im.save(path, exif=ex)
+
+
+def test_info_exif_and_gps(client):
+    f = client.day / "exif.jpg"
+    _jpeg_with_exif(f)
+    info = client.get("/api/info", query_string={"path": str(f)}).get_json()
+    e = info["exif"]
+    assert e["model"] == "Canon EOS R6" and e["iso"] == 400 and abs(e["fnumber"] - 2.8) < 1e-6
+    assert abs(e["exposure"] - 1 / 250) < 1e-9 and e["focal"] == 50 and e["lens"] == "RF50mm F1.8 STM"
+    assert info["taken"] == "2024-03-16 10:20:30"
+    assert abs(info["gps"]["lat"] - 33.5) < 1e-6 and abs(info["gps"]["lon"] - 126.53) < 1e-6
+
+
+def test_info_without_gps_and_histogram(client):
+    f = client.day / "nogps.jpg"
+    _jpeg_with_exif(f, gps=False)
+    assert client.get("/api/info", query_string={"path": str(f)}).get_json()["gps"] is None
+    h = client.get("/api/histogram", query_string={"path": str(f)}).get_json()
+    assert len(h["r"]) == len(h["g"]) == len(h["b"]) == len(h["l"]) == 256
+    assert max(range(256), key=lambda i: h["r"][i]) > 180   # 빨간 사진

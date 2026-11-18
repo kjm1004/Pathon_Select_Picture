@@ -247,6 +247,7 @@
     try {
       await post('/api/rating', { paths: [p.path], stars });
       refreshSummary();
+      if (state.photos[state.focus] === p) { ipFor = undefined; scheduleInfoPanel(); }
     } catch (e) {
       p.rating = before; renderAll();
       toast('별점을 저장하지 못했습니다: ' + e.message, true);
@@ -447,6 +448,8 @@
     state.gridSize = ['s', 'm', 'l'].includes(settings.gridSize) ? settings.gridSize : 'm';
     setSidebar(settings.sidebar !== false, false);
     setIndexBar(settings.indexBar !== false, false);
+    setIndexSize(settings.indexSize || 'm', false);
+    setInfoPanel(settings.infoPanel === true, false);
     state.smooth = [0, 1, 2, 3, 4].includes(+settings.smooth) ? +settings.smooth : 2;
     state.defaultStars = [0, 1, 2, 3, 4, 5].includes(+settings.defaultStars) ? +settings.defaultStars : 3;
     $('smooth').value = String(state.smooth);
@@ -500,6 +503,177 @@
     if (save) saveSettings({ indexBar: show });
   }
   const indexShown = () => !document.querySelector('.app').classList.contains('no-index');
+
+  // 인덱스 크기 (설정)
+  function setIndexSize(v, save = true) {
+    if (!['s', 'm', 'l', 'xl'].includes(v)) v = 'm';
+    const app = document.querySelector('.app');
+    ['s', 'l', 'xl'].forEach((k) => app.classList.toggle('ix-' + k, k === v));
+    state.indexSize = v;
+    $('set-ixsize').value = v;
+    requestAnimationFrame(() => centerStrip(state.focus));
+    if (save) saveSettings({ indexSize: v });
+  }
+  $('set-ixsize').addEventListener('change', (e) => setIndexSize(e.target.value));
+
+  // ------------------------------------------------------------ 사진 속성 창
+  const appEl = document.querySelector('.app');
+  const infoShown = () => !appEl.classList.contains('no-info');
+  function setInfoPanel(show, save = true) {
+    appEl.classList.toggle('no-info', !show);
+    $('info-btn').setAttribute('aria-pressed', show);
+    window.dispatchEvent(new Event('resize'));
+    if (show) { ipFor = undefined; scheduleInfoPanel(); }
+    if (save) saveSettings({ infoPanel: show });
+  }
+  $('info-btn').addEventListener('click', () => setInfoPanel(!infoShown()));
+  $('ip-close').addEventListener('click', () => setInfoPanel(false));
+
+  let ipFor, ipTimer = null;
+  const histCache = new Map();
+  // 빠르게 넘길 때는 멈춘 사진만 읽도록 잠깐 기다린다
+  function scheduleInfoPanel() {
+    if (!infoShown()) return;
+    const p = state.photos[state.focus] || null;
+    const key = p ? p.path : null;
+    if (key === ipFor) return;
+    ipFor = key;
+    clearTimeout(ipTimer);
+    ipTimer = setTimeout(() => renderInfoPanel(p), 150);
+  }
+
+  async function getInfo(p) {
+    if (state.info.has(p.path)) return state.info.get(p.path);
+    const info = await api('/api/info?path=' + encodeURIComponent(p.path));
+    state.info.set(p.path, info);
+    return info;
+  }
+  async function getHist(p) {
+    if (histCache.has(p.path)) return histCache.get(p.path);
+    const h = await api('/api/histogram?path=' + encodeURIComponent(p.path));
+    if (histCache.size > 300) histCache.clear();
+    histCache.set(p.path, h);
+    return h;
+  }
+
+  const dl = (rows) => rows.filter((r) => r[1] !== null && r[1] !== undefined && r[1] !== '')
+    .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+  const PROGRAM = { 1: '수동', 2: '프로그램', 3: '조리개 우선', 4: '셔터 우선', 5: '크리에이티브', 6: '액션', 7: '인물', 8: '풍경' };
+  const METERING = { 1: '평균', 2: '중앙 중점', 3: '스팟', 4: '멀티 스팟', 5: '평가(패턴)', 6: '부분' };
+  const fmtExp = (t) => (t >= 1 ? `${+t.toFixed(1)}초` : `1/${Math.round(1 / t)}초`);
+
+  async function renderInfoPanel(p) {
+    $('ip-empty').hidden = !!p;
+    $('ip-body').hidden = !p;
+    if (!p) return;
+    const folder = p.path.slice(0, p.path.length - p.name.length).replace(/[\\/]$/, '');
+    const fileRows = (info) => [
+      ['파일 이름', p.name],
+      ['폴더', folder],
+      ['크기', fmtSize(p.size)],
+      ['해상도', info && info.width ? `${info.width} × ${info.height} (${((info.width * info.height) / 1e6).toFixed(1)}MP)` : null],
+      ['형식', info && info.format ? info.format : extOf(p.name)],
+      ['촬영 일시', info && info.taken],
+      ['수정 일시', p.mtime],
+      ['별점', p.rating ? '★'.repeat(p.rating) : `없음${state.defaultStars ? ` (기본 ★${state.defaultStars})` : ''}`],
+    ];
+    $('ip-file').innerHTML = dl(fileRows(null));
+
+    let info = null;
+    try { info = await getInfo(p); } catch (_) { /* 정보 없음 */ }
+    if (ipFor !== p.path) return;
+    $('ip-file').innerHTML = dl(fileRows(info));
+
+    const e = (info && info.exif) || {};
+    const camera = e.model ? (e.make && !e.model.toLowerCase().startsWith(e.make.toLowerCase()) ? `${e.make} ${e.model}` : e.model) : null;
+    const shot = [
+      ['카메라', camera],
+      ['렌즈', e.lens],
+      ['초점 거리', e.focal ? `${+e.focal.toFixed(1)}mm${e.focal35 ? ` (35mm 환산 ${e.focal35}mm)` : ''}` : null],
+      ['조리개', e.fnumber ? `f/${e.fnumber.toFixed(1)}` : null],
+      ['셔터 속도', e.exposure ? fmtExp(e.exposure) : null],
+      ['ISO', e.iso],
+      ['노출 보정', e.bias !== undefined ? `${e.bias > 0 ? '+' : ''}${e.bias.toFixed(1)} EV` : null],
+      ['노출 모드', PROGRAM[e.program]],
+      ['측광', METERING[e.metering]],
+      ['플래시', e.flash !== undefined ? (e.flash & 1 ? '발광' : '발광 안 함') : null],
+      ['화이트밸런스', e.whiteBalance !== undefined ? (e.whiteBalance ? '수동' : '자동') : null],
+      ['소프트웨어', e.software],
+    ];
+    const shotHtml = dl(shot);
+    $('ip-shot').innerHTML = shotHtml;
+    $('ip-shot-none').hidden = !!shotHtml;
+
+    renderGps(info && info.gps);
+
+    const msg = $('ip-hist-msg');
+    if (!p.viewable) {
+      clearHist(); msg.textContent = '이 형식은 히스토그램을 만들 수 없습니다'; msg.hidden = false; return;
+    }
+    try {
+      const h = await getHist(p);
+      if (ipFor !== p.path) return;
+      drawHist(h); msg.hidden = true;
+    } catch (_) {
+      clearHist(); msg.textContent = '히스토그램을 만들 수 없습니다'; msg.hidden = false;
+    }
+  }
+
+  function clearHist() { const c = $('ip-hist'); c.getContext('2d').clearRect(0, 0, c.width, c.height); }
+  function drawHist(h) {
+    const c = $('ip-hist');
+    const ctx = c.getContext('2d');
+    const W = c.width, H = c.height;
+    ctx.clearRect(0, 0, W, H);
+    // 양 끝(완전 검정/흰색) 칸은 튀는 경우가 많아 높이 기준에서 뺀다
+    let max = 1;
+    for (const a of [h.r, h.g, h.b, h.l]) for (let i = 1; i < 255; i++) if (a[i] > max) max = a[i];
+    const draw = (arr, stroke, fill) => {
+      ctx.beginPath();
+      ctx.moveTo(0, H);
+      for (let i = 0; i < 256; i++) ctx.lineTo((i / 255) * W, H - Math.min(1, arr[i] / max) * H * 0.95);
+      ctx.lineTo(W, H);
+      ctx.closePath();
+      ctx.fillStyle = fill; ctx.fill();
+      ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke();
+    };
+    draw(h.l, 'rgba(201,206,212,.85)', 'rgba(201,206,212,.14)');
+    ctx.globalCompositeOperation = 'lighter';
+    draw(h.r, 'rgba(229,72,77,.9)', 'rgba(229,72,77,.22)');
+    draw(h.g, 'rgba(70,167,88,.9)', 'rgba(70,167,88,.22)');
+    draw(h.b, 'rgba(62,123,250,.9)', 'rgba(62,123,250,.22)');
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function renderGps(g) {
+    const box = $('ip-gps');
+    if (!g) {
+      box.dataset.k = '';
+      box.innerHTML = '<p class="muted ip-small">위치 정보가 없습니다</p>';
+      return;
+    }
+    const key = `${g.lat},${g.lon}`;
+    if (box.dataset.k === key) return;   // 같은 위치면 지도를 다시 불러오지 않는다
+    box.dataset.k = key;
+    const d = 0.008;
+    const bbox = [g.lon - d * 1.6, g.lat - d, g.lon + d * 1.6, g.lat + d].map((v) => v.toFixed(6)).join(',');
+    const osm = `https://www.openstreetmap.org/?mlat=${g.lat}&mlon=${g.lon}#map=16/${g.lat}/${g.lon}`;
+    const gmap = `https://www.google.com/maps?q=${g.lat},${g.lon}`;
+    box.innerHTML = `<dl class="ip-dl">${dl([['위도', g.lat.toFixed(6)], ['경도', g.lon.toFixed(6)], ['고도', g.alt !== null && g.alt !== undefined ? `${g.alt}m` : null]])}</dl>
+      <iframe class="ip-map" title="촬영 위치 지도" loading="lazy" src="https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&amp;layer=mapnik&amp;marker=${g.lat},${g.lon}"></iframe>
+      <div class="ip-links">
+        <button class="btn" data-url="${esc(osm)}">OpenStreetMap에서 열기</button>
+        <button class="btn" data-url="${esc(gmap)}">Google 지도에서 열기</button>
+      </div>
+      <p class="muted ip-small">지도는 인터넷이 연결되어 있을 때 보입니다</p>`;
+  }
+  $('ip-gps').addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-url]');
+    if (!b) return;
+    const url = b.dataset.url;
+    if (desktop()) window.pywebview.api.open_url(url).catch(() => {});
+    else window.open(url, '_blank', 'noopener');
+  });
   $('index-btn').addEventListener('click', () => setIndexBar(!indexShown()));
   $('sidebar-btn').addEventListener('click', () => setSidebar(!sidebarShown()));
 
@@ -895,6 +1069,7 @@
   });
   function openSettings() {
     $('set-default').value = String(state.defaultStars);
+    $('set-ixsize').value = state.indexSize || 'm';
     $('set-smooth').value = String(state.smooth);
     $('settings').hidden = false;
     $('set-default').focus();
@@ -1055,6 +1230,7 @@
     $('marked-count').textContent = `${list.length}장`;
     $('marked-size').textContent = fmtSize(total);
     $('delete-btn').disabled = list.length === 0;
+    scheduleInfoPanel();
   }
 
   let bigFor = null;
@@ -1179,6 +1355,7 @@
     else if (ev.key === 'Escape' && state.fs) { ev.preventDefault(); closeFs(); }
     else if ((ev.key === 'b' || ev.key === 'B' || ev.key === 'ㅠ') && !ev.ctrlKey && !state.fs) { ev.preventDefault(); setSidebar(!sidebarShown()); }
     else if ((ev.key === 'i' || ev.key === 'I' || ev.key === 'ㅑ') && !ev.ctrlKey && !state.fs) { ev.preventDefault(); setIndexBar(!indexShown()); }
+    else if ((ev.key === 'p' || ev.key === 'P' || ev.key === 'ㅔ') && !ev.ctrlKey && !state.fs) { ev.preventDefault(); setInfoPanel(!infoShown()); }
     else if (/^[0-5]$/.test(ev.key) && !ev.ctrlKey && !ev.altKey) {
       ev.preventDefault();
       if (state.photos.length) {

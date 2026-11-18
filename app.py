@@ -42,7 +42,7 @@ DATA_DIR = Path(os.environ.get("PHOTO_CLEANER_HOME", Path.home() / ".photo-clean
 CACHE_DIR = Path(os.environ.get("PHOTO_CLEANER_CACHE", DATA_DIR / "cache"))
 SETTINGS_FILE = DATA_DIR / "settings.json"
 RATINGS_DB = DATA_DIR / "ratings.db"
-DEFAULT_SETTINGS = {"root": None, "folder": None, "photo": None, "view": "single", "nup": 2, "gridSize": "m", "sidebar": True, "smooth": 2, "defaultStars": 3, "indexBar": True}
+DEFAULT_SETTINGS = {"root": None, "folder": None, "photo": None, "view": "single", "nup": 2, "gridSize": "m", "sidebar": True, "smooth": 2, "defaultStars": 3, "indexBar": True, "indexSize": "m", "infoPanel": False}
 
 # 미리보기를 만들 수 있는 형식
 VIEWABLE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
@@ -287,9 +287,92 @@ def read_info(path: Path) -> dict:
             taken = sub.get(EXIF_TAGS["DateTimeOriginal"]) or exif.get(EXIF_TAGS["DateTime"])
             if taken:
                 info["taken"] = str(taken).replace(":", "-", 2)
+            info["exif"] = exif_details(exif, sub)
+            info["gps"] = gps_details(exif.get_ifd(0x8825) if hasattr(exif, "get_ifd") else {})
+            info["format"] = im.format
+            info["mode"] = im.mode
     except Exception:
         pass
     return info
+
+
+def _num(v):
+    """EXIF 숫자(분수 포함)를 float로. 실패하면 None."""
+    try:
+        if isinstance(v, tuple) and len(v) == 2:
+            return float(v[0]) / float(v[1]) if v[1] else None
+        return float(v)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _text(v):
+    if v is None:
+        return None
+    if isinstance(v, bytes):
+        v = v.decode("utf-8", "ignore")
+    v = str(v).replace("\x00", "").strip()
+    return v or None
+
+
+def exif_details(ifd0, sub) -> dict:
+    """촬영 정보: 화면에서 읽기 좋은 값만 골라 보낸다."""
+    t = EXIF_TAGS
+    out = {
+        "make": _text(ifd0.get(t["Make"])),
+        "model": _text(ifd0.get(t["Model"])),
+        "software": _text(ifd0.get(t["Software"])),
+        "orientation": ifd0.get(t["Orientation"]),
+        "lens": _text(sub.get(t["LensModel"])) or _text(sub.get(t.get("LensMake", 0))),
+        "exposure": _num(sub.get(t["ExposureTime"])),
+        "fnumber": _num(sub.get(t["FNumber"])),
+        "iso": sub.get(t["ISOSpeedRatings"]),
+        "focal": _num(sub.get(t["FocalLength"])),
+        "focal35": sub.get(t["FocalLengthIn35mmFilm"]),
+        "bias": _num(sub.get(t["ExposureBiasValue"])),
+        "flash": sub.get(t["Flash"]),
+        "whiteBalance": sub.get(t["WhiteBalance"]),
+        "program": sub.get(t["ExposureProgram"]),
+        "metering": sub.get(t["MeteringMode"]),
+    }
+    if isinstance(out["iso"], (tuple, list)):
+        out["iso"] = out["iso"][0] if out["iso"] else None
+    return {k: v for k, v in out.items() if v not in (None, "")}
+
+
+def gps_details(g) -> dict | None:
+    """GPS 정보를 십진수 위도/경도로. 없으면 None."""
+    if not g or 2 not in g or 4 not in g:
+        return None
+
+    def dms(v, ref):
+        try:
+            d, m, sec = (_num(x) for x in v)
+            val = d + m / 60 + sec / 3600
+        except (TypeError, ValueError):
+            val = _num(v)
+        if val is None:
+            return None
+        ref = _text(ref) or ""
+        return -val if ref.upper() in ("S", "W") else val
+
+    lat, lon = dms(g.get(2), g.get(1)), dms(g.get(4), g.get(3))
+    if lat is None or lon is None or (lat == 0 and lon == 0) or abs(lat) > 90 or abs(lon) > 180:
+        return None
+    alt = _num(g.get(6))
+    if alt is not None and g.get(5) in (1, b"\x01"):
+        alt = -alt
+    return {"lat": round(lat, 7), "lon": round(lon, 7), "alt": round(alt, 1) if alt is not None else None}
+
+
+def histogram(path: Path) -> dict:
+    """중간 크기 썸네일로 RGB / 밝기 히스토그램(각 256칸)을 계산한다."""
+    thumb = make_thumb(path, "m")
+    with Image.open(thumb) as im:
+        im = im.convert("RGB")
+        h = im.histogram()
+        lum = im.convert("L").histogram()
+    return {"r": h[0:256], "g": h[256:512], "b": h[512:768], "l": lum}
 
 
 # ---------------------------------------------------------------- 보안
@@ -493,6 +576,17 @@ def api_info():
     return jsonify(read_info(path))
 
 
+@app.get("/api/histogram")
+def api_histogram():
+    path = safe_path(request.args.get("path"))
+    if not path.is_file() or path.suffix.lower() not in VIEWABLE_EXT:
+        abort(415, "히스토그램을 만들 수 없는 형식입니다")
+    try:
+        return jsonify(histogram(path))
+    except Exception:
+        abort(415, "이미지를 읽을 수 없습니다")
+
+
 @app.post("/api/delete")
 def api_delete():
     data = request.get_json(silent=True) or {}
@@ -535,6 +629,14 @@ class DesktopApi:
         if not result:
             return None
         return result[0] if isinstance(result, (list, tuple)) else str(result)
+
+    def open_url(self, url):
+        """지도 링크 등을 기본 웹 브라우저로 연다 (https만)."""
+        url = str(url)
+        if url.startswith("https://"):
+            webbrowser.open(url)
+            return True
+        return False
 
     def set_fullscreen(self, on):
         on = bool(on)
