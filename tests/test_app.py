@@ -182,3 +182,35 @@ def test_info_without_gps_and_histogram(client):
     h = client.get("/api/histogram", query_string={"path": str(f)}).get_json()
     assert len(h["r"]) == len(h["g"]) == len(h["b"]) == len(h["l"]) == 256
     assert max(range(256), key=lambda i: h["r"][i]) > 180   # 빨간 사진
+
+
+def test_folder_size_and_video_listing(client):
+    vid = client.day / "clip.mp4"
+    vid.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 2000)
+    d = client.get("/api/dirs", query_string={"path": str(client.root / "2024")}).get_json()["dirs"][0]
+    expected = sum(f.stat().st_size for f in client.day.iterdir() if f.suffix.lower() in (".jpg", ".mp4"))
+    assert d["count"] == 4 and d["size"] == expected
+    ph = {p["name"]: p for p in client.get("/api/photos", query_string={"path": str(client.day)}).get_json()["photos"]}
+    assert ph["clip.mp4"]["video"] is True and ph["IMG_0.JPG"]["video"] is False
+
+
+def test_video_stream_range_and_client_thumbnail(client):
+    import io as _io
+    vid = client.day / "clip.mp4"
+    vid.write_bytes(bytes(range(256)) * 40)
+    r = client.get("/api/video", query_string={"path": str(vid)}, headers={"Range": "bytes=10-19"})
+    assert r.status_code == 206 and r.data == bytes(range(10, 20)) and r.mimetype == "video/mp4"
+    # 첫 화면이 아직 없으면 404
+    assert client.get("/api/thumb", query_string={"path": str(vid), "size": "s"}).status_code == 404
+    buf = _io.BytesIO(); Image.new("RGB", (320, 180), (10, 200, 10)).save(buf, "JPEG")
+    assert client.post("/api/vthumb", query_string={"path": str(vid)}, data=buf.getvalue()).status_code == 403
+    assert client.post("/api/vthumb", query_string={"path": str(vid)}, data=b"not an image",
+                       headers={"X-Token": client.mod.TOKEN}).status_code == 400
+    assert client.post("/api/vthumb", query_string={"path": str(vid)}, data=buf.getvalue(),
+                       headers={"X-Token": client.mod.TOKEN}).get_json()["ok"]
+    r = client.get("/api/thumb", query_string={"path": str(vid), "size": "s"})
+    assert r.status_code == 200 and r.mimetype == "image/jpeg"
+    # 동영상도 삭제·별점 가능
+    tok = {"X-Token": client.mod.TOKEN}
+    assert client.post("/api/rating", json={"paths": [str(vid)], "stars": 4}, headers=tok).status_code == 200
+    assert len(client.post("/api/delete", json={"paths": [str(vid)], "permanent": True}, headers=tok).get_json()["deleted"]) == 1

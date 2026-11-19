@@ -573,11 +573,14 @@
     $('ip-body').hidden = !p;
     if (!p) return;
     const folder = p.path.slice(0, p.path.length - p.name.length).replace(/[\\/]$/, '');
+    let vm = null;
     const fileRows = (info) => [
       ['파일 이름', p.name],
       ['폴더', folder],
       ['크기', fmtSize(p.size)],
-      ['해상도', info && info.width ? `${info.width} × ${info.height} (${((info.width * info.height) / 1e6).toFixed(1)}MP)` : null],
+      ['종류', p.video ? `동영상 (${extOf(p.name)})` : null],
+      ['길이', vm ? fmtDur(vm.duration) : null],
+      ['해상도', info && info.width ? `${info.width} × ${info.height} (${((info.width * info.height) / 1e6).toFixed(1)}MP)` : vm && vm.w ? `${vm.w} × ${vm.h}` : null],
       ['형식', info && info.format ? info.format : extOf(p.name)],
       ['촬영 일시', info && info.taken],
       ['수정 일시', p.mtime],
@@ -587,6 +590,7 @@
 
     let info = null;
     try { info = await getInfo(p); } catch (_) { /* 정보 없음 */ }
+    if (p.video) vm = await getVMeta(p.path);
     if (ipFor !== p.path) return;
     $('ip-file').innerHTML = dl(fileRows(info));
 
@@ -614,7 +618,7 @@
 
     const msg = $('ip-hist-msg');
     if (!p.viewable) {
-      clearHist(); msg.textContent = '이 형식은 히스토그램을 만들 수 없습니다'; msg.hidden = false; return;
+      clearHist(); msg.textContent = p.video ? '동영상은 히스토그램이 없습니다' : '이 형식은 히스토그램을 만들 수 없습니다'; msg.hidden = false; return;
     }
     try {
       const h = await getHist(p);
@@ -771,7 +775,7 @@
           <svg class="chev ${chevCls}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9AA1AA" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
           <svg class="folder" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
           <span class="nm">${esc(n.name)}</span>
-          ${n.loading ? '<span class="cnt">…</span>' : n.count ? `<span class="cnt">${n.count}</span>` : ''}
+          ${n.loading ? '<span class="cnt">…</span>' : n.count ? `<span class="cnt" title="이 폴더의 사진·동영상 ${n.count}개, ${fmtSize(n.size || 0)}">${n.count}<span class="sz"> · ${fmtSize(n.size || 0)}</span></span>` : ''}
           ${marked ? `<span class="badge" title="삭제 표시">${marked}</span>` : ''}
         </button>`);
         if (open && n.children) walk(n.children, depth + 1);
@@ -841,12 +845,107 @@
     applyFilter();
   }
 
+  // ------------------------------------------------------------ 썸네일 (사진 / 동영상)
+  // 동영상은 서버에 저장된 첫 화면을 쓰고, 없으면 화면이 동영상을 읽어 첫 화면을 만들어 올린다
+  function thumbHtml(p, size, lazy = true) {
+    const ld = lazy ? 'loading="lazy" ' : '';
+    if (p.video) {
+      const src = vthumbUrls.get(p.path) || thumbUrl(p.path, 's');
+      return `<span class="ext">${esc(extOf(p.name))}</span><img ${ld}draggable="false" class="vimg${vfail.has(p.path) ? ' broken' : ''}" data-v="${esc(p.path)}" src="${src}" alt="">${PLAY_ICON}`;
+    }
+    return p.viewable ? `<img ${ld}draggable="false" src="${thumbUrl(p.path, size)}" alt="">` : `<span class="ext">${esc(extOf(p.name))}</span>`;
+  }
+  const PLAY_ICON = '<span class="play" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="#fff"><path d="M6 4l14 8-14 8z"/></svg></span>';
+  const vthumbUrls = new Map();   // 동영상 경로 -> 첫 화면(이번 실행에서 만든 것)
+  const vmeta = new Map();        // 동영상 경로 -> {duration, w, h}
+  const vfail = new Set();        // 재생할 수 없는 동영상
+  const vqueue = [];
+  let vbusy = 0;
+  function forVImgs(path, fn) { document.querySelectorAll('img[data-v]').forEach((im) => { if (im.dataset.v === path) fn(im); }); }
+  function requestVThumb(path) {
+    if (vthumbUrls.has(path) || vfail.has(path) || vqueue.includes(path)) return;
+    vqueue.push(path);
+    pumpV();
+  }
+  function pumpV() {
+    while (vbusy < 2 && vqueue.length) {
+      const path = vqueue.shift();
+      vbusy++;
+      makeVThumb(path).finally(() => { vbusy--; pumpV(); });
+    }
+  }
+  function makeVThumb(path) {
+    return new Promise((resolve) => {
+      const v = document.createElement('video');
+      v.muted = true; v.preload = 'auto'; v.playsInline = true;
+      let done = false;
+      const finish = (ok) => {
+        if (done) return;
+        done = true; clearTimeout(timer);
+        v.removeAttribute('src'); v.load();
+        if (!ok) { vfail.add(path); forVImgs(path, (im) => im.classList.add('broken')); }
+        resolve();
+      };
+      const timer = setTimeout(() => finish(false), 15000);
+      v.onerror = () => finish(false);
+      v.onloadedmetadata = () => {
+        vmeta.set(path, { duration: v.duration, w: v.videoWidth, h: v.videoHeight });
+        v.currentTime = Math.min(1, (isFinite(v.duration) ? v.duration : 2) * 0.1);   // 맨 앞 검은 화면을 피해 조금 뒤
+      };
+      v.onseeked = () => {
+        try {
+          if (!v.videoWidth) return finish(false);
+          const k = Math.min(1, 480 / Math.max(v.videoWidth, v.videoHeight));
+          const c = document.createElement('canvas');
+          c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k);
+          c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+          c.toBlob((blob) => {
+            if (!blob) return finish(false);
+            const url = URL.createObjectURL(blob);
+            vthumbUrls.set(path, url);
+            forVImgs(path, (im) => { im.classList.remove('broken'); im.src = url; });
+            fetch('/api/vthumb?path=' + encodeURIComponent(path), { method: 'POST', headers: { 'X-Token': TOKEN, 'Content-Type': 'image/jpeg' }, body: blob }).catch(() => {});
+            finish(true);
+          }, 'image/jpeg', 0.85);
+        } catch (_) { finish(false); }
+      };
+      v.src = '/api/video?path=' + encodeURIComponent(path);
+    });
+  }
+  // 저장된 첫 화면이 없으면(404) 만들기 시작
+  document.addEventListener('error', (e) => {
+    const im = e.target;
+    if (!im || im.tagName !== 'IMG' || !im.dataset.v) return;
+    const path = im.dataset.v;
+    if (vthumbUrls.has(path)) { im.src = vthumbUrls.get(path); return; }
+    im.classList.add('broken');
+    if (!vfail.has(path)) requestVThumb(path);
+  }, true);
+  // 동영상 길이·해상도 (속성 창용)
+  function getVMeta(path) {
+    if (vmeta.has(path)) return Promise.resolve(vmeta.get(path));
+    return new Promise((resolve) => {
+      const v = document.createElement('video');
+      v.preload = 'metadata'; v.muted = true;
+      const t = setTimeout(() => { v.removeAttribute('src'); resolve(null); }, 8000);
+      v.onloadedmetadata = () => { clearTimeout(t); const m = { duration: v.duration, w: v.videoWidth, h: v.videoHeight }; vmeta.set(path, m); v.removeAttribute('src'); v.load(); resolve(m); };
+      v.onerror = () => { clearTimeout(t); resolve(null); };
+      v.src = '/api/video?path=' + encodeURIComponent(path);
+    });
+  }
+  const fmtDur = (sec) => {
+    if (!isFinite(sec)) return null;
+    sec = Math.round(sec);
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s2 = sec % 60;
+    return h ? `${h}:${String(m).padStart(2, '0')}:${String(s2).padStart(2, '0')}` : `${m}:${String(s2).padStart(2, '0')}`;
+  };
+
   // ------------------------------------------------------------ 인덱스 / 바둑판
   function buildStrip() {
     const strip = $('strip');
     strip.innerHTML = state.photos.map((p, i) => `
       <button class="ix" data-i="${i}" aria-label="${i + 1}번 ${esc(p.name)}">
-        <span class="th">${p.viewable ? `<img loading="lazy" draggable="false" src="${thumbUrl(p.path, 's')}" alt="">` : `<span class="ext">${esc(extOf(p.name))}</span>`}
+        <span class="th">${thumbHtml(p, 's')}
           <span class="x"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#1A0E0A" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
           <span class="rb" hidden></span>
         </span>
@@ -860,7 +959,7 @@
     grid.innerHTML = state.photos.map((p, i) => `
       <div class="cell" data-i="${i}">
         <button class="pic" data-i="${i}" aria-label="${esc(p.name)} 삭제 표시 전환 (더블클릭: 전체 화면)">
-          ${p.viewable ? `<img loading="lazy" src="${thumbUrl(p.path, 'm')}" alt="">` : `<span class="ext">${esc(extOf(p.name))}</span>`}
+          ${thumbHtml(p, 'm')}
           <span class="tag">${num3(i)}</span>
           <span class="del"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#1A0E0A" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>삭제</span>
         </button>
@@ -914,7 +1013,7 @@
     multiBuiltFor = state.folder;
     box.innerHTML = state.photos.map((p, i) => `<div class="mcell" data-i="${i}">
         <button class="mpic" data-i="${i}" aria-label="${esc(p.name)} (클릭: 선택, 더블클릭: 전체 화면)">
-          ${p.viewable ? `<img loading="lazy" draggable="false" src="${thumbUrl(p.path, 'l')}" alt="">` : `<span class="ext">${esc(extOf(p.name))}</span>`}
+          ${thumbHtml(p, 'l')}
           <span class="tag">${num3(i)}</span>
           <span class="del"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#1A0E0A" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>삭제</span>
         </button>
@@ -1173,6 +1272,21 @@
     if (img === $('big-img') && bigZoom) bigZoom.reset();
     if (img === $('fs-img') && fsZoom) fsZoom.reset();
     delete img.dataset.orig;
+    const vid = img.parentNode.querySelector('video');
+    if (p.video) {
+      img.hidden = true; noprev.hidden = true;
+      img.removeAttribute('src'); img.dataset.want = '';
+      if (vid.dataset.p !== p.path) {
+        vid.pause();
+        vid.dataset.p = p.path;
+        vid.poster = vthumbUrls.get(p.path) || thumbUrl(p.path, 'm');
+        vid.src = '/api/video?path=' + encodeURIComponent(p.path);
+      }
+      vid.hidden = false;
+      requestVThumb(p.path);
+      return;
+    }
+    stopVideo(vid);
     if (p.viewable) {
       img.hidden = false; noprev.hidden = true;
       img.alt = p.name;
@@ -1236,6 +1350,37 @@
   window.addEventListener('resize', updateMaxMode);
   updateMaxMode();
 
+  // 동영상 플레이어 멈추고 비우기
+  function stopVideo(vid) {
+    if (!vid || !vid.dataset.p) { if (vid) vid.hidden = true; return; }
+    vid.pause(); vid.removeAttribute('src'); vid.removeAttribute('poster'); vid.load();
+    vid.dataset.p = ''; vid.hidden = true;
+  }
+  // 재생할 수 없는 동영상이면 안내
+  for (const [vid, np] of [[$('big-video'), $('big-noprev')], [$('fs-video'), $('fs-noprev')]]) {
+    vid.addEventListener('error', () => {
+      if (!vid.dataset.p) return;
+      vid.hidden = true; np.hidden = false;
+      np.textContent = `${extOf(vid.dataset.p)} 동영상은 이 프로그램에서 재생할 수 없습니다 (Windows 동영상 플레이어로 열어 보세요)`;
+    });
+    vid.addEventListener('loadedmetadata', () => {
+      vmeta.set(vid.dataset.p, { duration: vid.duration, w: vid.videoWidth, h: vid.videoHeight });
+      const cur = state.photos[state.focus];
+      if (cur && cur.path === vid.dataset.p) renderMeta(cur);
+    });
+  }
+  // 보이지 않는 플레이어는 멈춘다 (보기 전환, 전체 화면 열고 닫기)
+  function pauseHiddenVideos() {
+    if (state.view !== 'single' || state.fs) $('big-video').pause();
+    if (!state.fs) $('fs-video').pause();
+  }
+  function toggleCurrentVideo() {
+    const vid = state.fs ? $('fs-video') : state.view === 'single' ? $('big-video') : null;
+    if (!vid || vid.hidden || !vid.dataset.p) return false;
+    if (vid.paused) vid.play().catch(() => {}); else vid.pause();
+    return true;
+  }
+
   // ------------------------------------------------------------ 그리기
   function markedPhotos() {
     if (!state.folder) return [];
@@ -1286,6 +1431,7 @@
     $('marked-count').textContent = `${list.length}장`;
     $('marked-size').textContent = fmtSize(total);
     $('delete-btn').disabled = list.length === 0;
+    pauseHiddenVideos();
     scheduleInfoPanel();
   }
 
@@ -1316,6 +1462,8 @@
     const parts = [];
     if (p.dir) parts.push(p.dir);
     parts.push(i && i.taken ? i.taken : p.mtime);
+    const vm = p.video && vmeta.get(p.path);
+    if (p.video) parts.push('동영상' + (vm ? ` ${fmtDur(vm.duration)} · ${vm.w}×${vm.h}` : ''));
     if (i && i.width) parts.push(`${i.width}×${i.height}`);
     parts.push(fmtSize(p.size));
     if (i && i.camera) parts.push(i.camera);
@@ -1368,7 +1516,11 @@
       // 탐색기의 폴더별 사진 수 줄이기 (모아 보기에서는 여러 폴더)
       gone.forEach((gp) => {
         const node = state.nodes.get(gp.replace(/[\\/][^\\/]*$/, ''));
-        if (node && node.count) node.count -= 1;
+        if (node && node.count) {
+          node.count -= 1;
+          const d = res.deleted.find((x) => x.path === gp);
+          if (d && node.size) node.size = Math.max(0, node.size - d.size);
+        }
       });
       $('dialog').hidden = true;
       applyFilter(gone.has(focusPath) ? null : focusPath, oldFocus);
@@ -1409,6 +1561,7 @@
     else if (ev.key === 'Home') { ev.preventDefault(); setFocus(0); }
     else if (ev.key === 'End') { ev.preventDefault(); setFocus(state.photos.length - 1); }
     else if (ev.key === 'Escape' && state.fs) { ev.preventDefault(); closeFs(); }
+    else if ((ev.key === 'k' || ev.key === 'K' || ev.key === 'ㅏ') && !ev.ctrlKey) { if (toggleCurrentVideo()) ev.preventDefault(); }
     else if ((ev.key === 'b' || ev.key === 'B' || ev.key === 'ㅠ') && !ev.ctrlKey && !state.fs) { ev.preventDefault(); setSidebar(!sidebarShown()); }
     else if ((ev.key === 'i' || ev.key === 'I' || ev.key === 'ㅑ') && !ev.ctrlKey && !state.fs) { ev.preventDefault(); setIndexBar(!indexShown()); }
     else if ((ev.key === 'p' || ev.key === 'P' || ev.key === 'ㅔ') && !ev.ctrlKey && !state.fs) { ev.preventDefault(); setInfoPanel(!infoShown()); }

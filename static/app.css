@@ -311,6 +311,23 @@ button { cursor: pointer; }
 .fs-edge { position: fixed; top: 0; bottom: 0; width: 6px; z-index: 25; }
 .fs-edge.left { left: 0; } .fs-edge.right { right: 0; }
 
+/* ---------- 동영상 ---------- */
+.mvideo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; z-index: 1; }
+.big.marked .mvideo, .fs-stage.marked .mvideo { opacity: .4; }
+.big .mark-pill, .fs-stage .mark-pill { z-index: 2; }
+img.vimg { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: contain; }
+img.vimg.broken { display: none; }
+.play { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2; width: 34px; height: 34px; border-radius: 50%;
+  background: rgba(0,0,0,.55); border: 2px solid rgba(255,255,255,.85); display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.play svg { margin-left: 3px; }
+.ix .play { width: 18px; height: 18px; border-width: 1.5px; }
+.ix .play svg { width: 8px; height: 8px; margin-left: 1px; }
+.mcell .play { width: 56px; height: 56px; }
+.mcell .play svg { width: 22px; height: 22px; }
+.node .cnt .sz { color: #7D848D; }
+/* 번호·삭제·별점 표시는 동영상 썸네일 위에 */
+.cell .tag, .cell .del, .mcell .tag, .mcell .del, .ix .x, .ix .rb, .ix .num { z-index: 3; }
+
 @media (max-width: 700px) {
   .body { flex-wrap: wrap; overflow: auto; }
   .sidebar { flex: 1 1 100%; width: auto; }

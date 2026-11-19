@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import logging
 import os
@@ -50,7 +51,15 @@ if HEIF_OK:
     VIEWABLE_EXT |= {".heic", ".heif"}
 # 목록에는 보이지만 미리보기는 없는 형식(RAW 등)
 LIST_ONLY_EXT = {".heic", ".heif", ".cr2", ".cr3", ".nef", ".arw", ".dng", ".orf", ".rw2", ".raf"} - VIEWABLE_EXT
-PHOTO_EXT = VIEWABLE_EXT | LIST_ONLY_EXT
+# 동영상: 목록·삭제·별점은 사진과 같고, 재생은 화면(브라우저 엔진)이 직접 한다
+VIDEO_EXT = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".3gp", ".mts", ".m2ts", ".wmv"}
+VIDEO_MIME = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/mp4", ".webm": "video/webm", ".mkv": "video/webm",
+              ".3gp": "video/3gpp", ".avi": "video/x-msvideo", ".mts": "video/mp2t", ".m2ts": "video/mp2t", ".wmv": "video/x-ms-wmv"}
+PHOTO_EXT = VIEWABLE_EXT | LIST_ONLY_EXT | VIDEO_EXT   # 목록에 나오는 모든 파일 (사진 + 동영상)
+
+
+def is_video(name: str) -> bool:
+    return Path(name).suffix.lower() in VIDEO_EXT
 
 THUMB_SIZES = {"s": 160, "m": 360, "l": 1600, "x": 2560}
 TOKEN = secrets.token_urlsafe(24)
@@ -86,16 +95,21 @@ def safe_path(raw: str | None) -> Path:
     return p
 
 
-def count_photos(folder: Path) -> int:
-    n = 0
+def count_photos(folder: Path) -> tuple[int, int]:
+    """폴더 바로 안의 사진·동영상 개수와 전체 크기(바이트)."""
+    n = size = 0
     try:
         with os.scandir(folder) as it:
             for e in it:
                 if e.is_file(follow_symlinks=False) and is_photo(e.name):
                     n += 1
+                    try:
+                        size += e.stat().st_size
+                    except OSError:
+                        pass
     except OSError:
         pass
-    return n
+    return n, size
 
 
 def has_subdirs(folder: Path) -> bool:
@@ -157,6 +171,7 @@ def photo_entry(path: str, st: os.stat_result, rating: int = 0) -> dict:
         "size": st.st_size,
         "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
         "viewable": Path(name).suffix.lower() in VIEWABLE_EXT,
+        "video": is_video(name),
         "rating": rating,
     }
 
@@ -443,7 +458,8 @@ def api_dirs():
         abort(403, "폴더에 접근할 수 없습니다")
     for e in sorted(entries, key=lambda e: e.name.lower()):
         p = Path(e.path)
-        dirs.append({"name": e.name, "path": str(p), "count": count_photos(p), "hasChildren": has_subdirs(p)})
+        count, size = count_photos(p)
+        dirs.append({"name": e.name, "path": str(p), "count": count, "size": size, "hasChildren": has_subdirs(p)})
     return jsonify(path=str(folder), dirs=dirs, disk=disk_usage(folder))
 
 
@@ -531,6 +547,14 @@ def api_thumb():
     size_key = request.args.get("size", "s")
     if size_key not in THUMB_SIZES:
         abort(400, "size는 s, m, l, x 중 하나입니다")
+    if path.is_file() and is_video(path.name):
+        # 동영상 첫 화면은 화면 쪽에서 만들어 올려 둔 것을 쓴다 (없으면 404 → 화면이 만들어 올림)
+        out = cache_file(path, "v")
+        if not out.exists():
+            abort(404, "동영상 첫 화면이 아직 없습니다")
+        resp = send_file(out, mimetype="image/jpeg")
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
     if not path.is_file() or path.suffix.lower() not in VIEWABLE_EXT:
         abort(415, "미리보기를 만들 수 없는 형식입니다")
     try:
@@ -566,6 +590,40 @@ def api_thumb_for(path: Path, size_key: str):
     resp = send_file(out, mimetype="image/jpeg")
     resp.headers["Cache-Control"] = "private, max-age=86400"
     return resp
+
+
+@app.get("/api/video")
+def api_video():
+    """동영상 파일 그대로 (구간 요청 지원 → 재생 바로 이동 가능)."""
+    path = safe_path(request.args.get("path"))
+    if not path.is_file() or not is_video(path.name):
+        abort(415, "동영상 파일이 아닙니다")
+    resp = send_file(path, mimetype=VIDEO_MIME.get(path.suffix.lower(), "application/octet-stream"), conditional=True)
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    return resp
+
+
+@app.post("/api/vthumb")
+def api_vthumb():
+    """화면이 동영상에서 뽑은 첫 화면(JPEG)을 썸네일 캐시에 저장한다."""
+    path = safe_path(request.args.get("path"))
+    if not path.is_file() or not is_video(path.name):
+        abort(415, "동영상 파일이 아닙니다")
+    data = request.get_data(cache=False)
+    if not data or len(data) > 5 * 1024 * 1024:
+        abort(400, "잘못된 이미지입니다")
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            im = im.convert("RGB")
+            im.thumbnail((640, 640))
+            out = cache_file(path, "v")
+            out.parent.mkdir(parents=True, exist_ok=True)
+            tmp = out.with_suffix(".tmp")
+            im.save(tmp, "JPEG", quality=85)
+            os.replace(tmp, out)
+    except Exception:
+        abort(400, "잘못된 이미지입니다")
+    return jsonify(ok=True)
 
 
 @app.get("/api/info")
