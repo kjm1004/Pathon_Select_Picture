@@ -521,8 +521,9 @@
   const appEl = document.querySelector('.app');
   // 평소에는 [속성] 상태, 전체 화면에서는 오른쪽 끝에서 꺼냈을 때
   // 속성 창이 "화면 끝에서 꺼내는" 방식인지 (사진 전체 화면, 또는 창 최대화 + 속성 창 숨김)
-  const infoOverlay = () => appEl.classList.contains('fs-mode') || (appEl.classList.contains('max-mode') && appEl.classList.contains('no-info'));
-  const menuOverlay = () => appEl.classList.contains('fs-mode') || (appEl.classList.contains('max-mode') && appEl.classList.contains('no-sidebar'));
+  // (사진 전체 화면에서는 꺼내지 않는다)
+  const infoOverlay = () => appEl.classList.contains('max-mode') && appEl.classList.contains('no-info');
+  const menuOverlay = () => appEl.classList.contains('max-mode') && appEl.classList.contains('no-sidebar');
   const infoShown = () => (infoOverlay() ? appEl.classList.contains('reveal-right') : !appEl.classList.contains('no-info'));
   function setInfoPanel(show, save = true) {
     appEl.classList.remove('reveal-right');
@@ -1054,17 +1055,21 @@
 
   // ------------------------------------------------------------ 나란히 보기
   // 폴더의 모든 사진을 가로 한 줄로 만들어 두고, 화면 폭에 정한 장 수만큼 보이게 한다.
-  const MULTI_GAP = 12;
+  // 칸 사이 틈은 화면(CSS)에 실제로 적용된 값을 읽는다 (예전에는 12px로 고정해서 8px인 화면과 어긋났다)
+  const multiGap = () => parseFloat(getComputedStyle($('multi')).columnGap) || 0;
   let multiBuiltFor = null;
   const multiPitch = () => {
     const c = $('multi').firstElementChild;
-    return c ? c.getBoundingClientRect().width + MULTI_GAP : 0;
+    if (!c) return 0;
+    const n = c.nextElementSibling;
+    // 이웃 칸과의 실제 거리(소수점까지)를 한 칸 간격으로 쓴다
+    return n ? n.getBoundingClientRect().left - c.getBoundingClientRect().left : c.getBoundingClientRect().width + multiGap();
   };
 
   function sizeMulti() {
     const box = $('multi');
     const n = Math.max(1, Math.min(state.nup, state.photos.length || 1));
-    const cw = Math.max(80, (box.clientWidth - MULTI_GAP * (n - 1)) / n);
+    const cw = Math.max(80, (box.clientWidth - multiGap() * (n - 1)) / n);
     box.style.setProperty('--cw', `${cw}px`);
   }
 
@@ -1279,6 +1284,7 @@
     fsFor = null;
     $('fs').hidden = false;
     appEl.classList.add('fs-mode');
+    appEl.classList.remove('reveal-left', 'reveal-right');
     if (desktop()) window.pywebview.api.set_fullscreen(true).catch(() => {});
     else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
     renderAll();
@@ -1382,7 +1388,7 @@
     }
   }
   document.addEventListener('mousemove', (e) => {
-    if (!$('dialog').hidden || !$('settings').hidden) return;
+    if (state.fs || !$('dialog').hidden || !$('settings').hidden) return;   // 사진 전체 화면에서는 꺼내지 않음
     const x = e.clientX, y = e.clientY, w = window.innerWidth;
     // 창 최대화 상태에서는 상단 바 아래쪽 가장자리만 (맨 위 버튼을 가리지 않게)
     const top = state.fs ? 0 : edgeTop();
