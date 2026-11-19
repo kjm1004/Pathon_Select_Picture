@@ -231,6 +231,8 @@ def test_video_codec_detection(client):
 def test_open_requires_token_and_media(client, monkeypatch):
     opened = []
     monkeypatch.setattr(client.mod.subprocess, "Popen", lambda args: opened.append(args))
+    # Windows에서는 os.startfile 로 연다
+    monkeypatch.setattr(client.mod.os, "startfile", lambda p: opened.append([p]), raising=False)
     f = str(client.day / "IMG_0.JPG")
     assert client.post("/api/open", json={"path": f}).status_code == 403
     assert client.post("/api/open", json={"path": str(client.day / "memo.txt")}, headers={"X-Token": client.mod.TOKEN}).status_code == 400
