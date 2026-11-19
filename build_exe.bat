@@ -11,7 +11,7 @@ if %PYMINOR% GEQ 14 (
   echo.
 )
 .venv\Scripts\python -m pip install -r requirements.txt pyinstaller || goto :fail
-.venv\Scripts\pyinstaller --noconfirm --clean --windowed --name 사진정리 --add-data "static;static" app.py || goto :fail
+.venv\Scripts\pyinstaller --noconfirm --clean --windowed --name 사진정리 --add-data "static;static" --collect-data imageio_ffmpeg app.py || goto :fail
 rem build 폴더는 중간 파일이라 지운다 (실행 파일은 dist 폴더에 있음)
 if exist build rmdir /s /q build
 echo.

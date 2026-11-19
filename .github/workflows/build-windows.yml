@@ -22,7 +22,7 @@ jobs:
       - name: 테스트
         run: python -m pytest -q
       - name: exe 만들기
-        run: pyinstaller --noconfirm --clean --windowed --name PhotoSelect --add-data "static;static" app.py
+        run: pyinstaller --noconfirm --clean --windowed --name PhotoSelect --add-data "static;static" --collect-data imageio_ffmpeg app.py
       - name: 압축
         run: Compress-Archive -Path dist/PhotoSelect -DestinationPath PhotoSelect-windows.zip
       - uses: actions/upload-artifact@v4

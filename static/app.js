@@ -884,7 +884,8 @@
         if (done) return;
         done = true; clearTimeout(timer);
         v.removeAttribute('src'); v.load();
-        if (!ok) { vfail.add(path); forVImgs(path, (im) => im.classList.add('broken')); }
+        // 실패해도 이미 제대로 보이는 썸네일(서버가 만든 것)은 그대로 둔다
+        if (!ok) { vfail.add(path); forVImgs(path, (im) => { if (!im.naturalWidth) im.classList.add('broken'); }); }
         resolve();
       };
       const timer = setTimeout(() => finish(false), 15000);
@@ -1280,11 +1281,11 @@
       if (vid.dataset.p !== p.path) {
         vid.pause();
         vid.dataset.p = p.path;
+        vid.dataset.mode = '';   // '' = 원본 재생, 'preview' = 변환본 재생
         vid.poster = vthumbUrls.get(p.path) || thumbUrl(p.path, 'm');
         vid.src = '/api/video?path=' + encodeURIComponent(p.path);
       }
       vid.hidden = false;
-      requestVThumb(p.path);
       return;
     }
     stopVideo(vid);
@@ -1371,6 +1372,8 @@
     try { v = (await getInfo({ path })).video; } catch (_) { /* 무시 */ }
     if (vid.dataset.p !== path) return;
     const codec = v && v.videoName ? v.videoName : null;
+    // 변환 도구가 있으면 재생용(H.264)으로 바꿔서 재생 (변환본을 재생하다 실패한 경우는 제외)
+    if (v && v.canConvert && vid.dataset.mode !== 'preview') { convertAndPlay(vid, np, path, codec); return; }
     let msg;
     if (v && v.hevc) {
       msg = `<strong>이 동영상은 ${esc(codec)} 코덱으로 찍혀 있어 화면이 나오지 않습니다.</strong>
@@ -1386,6 +1389,37 @@
         <button class="btn" data-act="open">기본 동영상 프로그램으로 열기</button>
         ${v && v.hevc ? '<button class="btn" data-act="hevc">HEVC 확장 설치 안내</button>' : ''}
       </div></div>`;
+  }
+  const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function convertAndPlay(vid, np, path, codec) {
+    vid.pause(); vid.hidden = true; np.hidden = false;
+    np.innerHTML = `<div class="vproblem">
+      <strong>${codec ? esc(codec) + ' ' : ''}동영상을 이 프로그램에서 재생할 수 있게 변환하는 중…</strong>
+      <div class="vp-bar"><i style="width:0%"></i></div>
+      <span class="vp-pct">준비 중</span>
+      <span class="muted">한 번 변환하면 저장되어 다음부터는 바로 재생됩니다. 원본 파일은 그대로입니다.</span>
+      <div class="vp-actions"><button class="btn" data-act="open">기본 동영상 프로그램으로 열기</button></div></div>`;
+    const q = '/api/preview?path=' + encodeURIComponent(path);
+    let st;
+    try { st = await post(q, {}); } catch (e) { st = { state: 'error', error: e.message }; }
+    while (vid.dataset.p === path) {
+      if (st.state === 'ready') {
+        vid.dataset.mode = 'preview';
+        np.hidden = true; vid.hidden = false;
+        vid.src = `/api/video?preview=1&path=${encodeURIComponent(path)}`;
+        return;
+      }
+      if (st.state === 'error') {
+        np.innerHTML = `<div class="vproblem"><strong>변환하지 못했습니다.</strong><span class="muted">${esc(st.error || '')}</span>
+          <div class="vp-actions"><button class="btn" data-act="open">기본 동영상 프로그램으로 열기</button></div></div>`;
+        return;
+      }
+      const bar = np.querySelector('.vp-bar i'), pct = np.querySelector('.vp-pct');
+      if (bar) bar.style.width = `${st.progress || 0}%`;
+      if (pct) pct.textContent = st.state === 'queued' ? '다른 동영상 변환을 기다리는 중' : `${st.progress || 0}%`;
+      await sleepMs(600);
+      try { st = await api(q); } catch (e) { st = { state: 'error', error: e.message }; }
+    }
   }
   for (const [vid, np] of [[$('big-video'), $('big-noprev')], [$('fs-video'), $('fs-noprev')]]) {
     vid.addEventListener('error', () => showVideoProblem(vid, np, 'error'));

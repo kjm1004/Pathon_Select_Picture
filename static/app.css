@@ -318,6 +318,9 @@ button { cursor: pointer; }
 .big .noprev, .fs-stage .noprev { position: relative; z-index: 2; width: min(640px, 92%); aspect-ratio: auto; min-height: 220px; }
 .vproblem { display: flex; flex-direction: column; gap: 10px; line-height: 1.6; font-size: 14px; color: var(--text2); }
 .vproblem strong { color: var(--text); font-size: 15px; }
+.vp-bar { height: 8px; border-radius: 4px; background: #2A2E34; overflow: hidden; }
+.vp-bar i { display: block; height: 100%; background: var(--blue); transition: width .4s; }
+.vp-pct { font-variant-numeric: tabular-nums; color: var(--text); }
 .vp-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 4px; }
 .vp-actions .btn { height: 34px; }
 img.vimg { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: contain; }

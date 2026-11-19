@@ -21,6 +21,9 @@ import struct
 import subprocess
 import sys
 import threading
+import atexit
+import re
+import shutil
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -284,7 +287,9 @@ def read_info(path: Path) -> dict:
         "height": None,
     }
     if is_video(path.name):
-        info["video"] = video_codecs(path)
+        info["video"] = video_codecs(path) or {}
+        info["video"]["canConvert"] = bool(ffmpeg_exe())
+        info["video"]["preview"] = preview_file(path).exists()
         return info
     if path.suffix.lower() not in VIEWABLE_EXT:
         return info
@@ -314,6 +319,151 @@ def read_info(path: Path) -> dict:
     except Exception:
         pass
     return info
+
+
+# ---------------------------------------------------------------- ffmpeg (동영상 첫 화면, 재생용 변환)
+# HEVC처럼 화면이 직접 재생하지 못하는 동영상을 H.264로 바꿔 미리보기 캐시에 둔다. 원본은 건드리지 않는다.
+_NO_WINDOW = 0x08000000 if os.name == "nt" else 0   # Windows에서 검은 콘솔 창이 뜨지 않게
+
+
+def ffmpeg_exe() -> str | None:
+    try:
+        import imageio_ffmpeg
+
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.exists(exe):
+            return exe
+    except Exception:
+        pass
+    return shutil.which("ffmpeg")
+
+
+def preview_file(path: Path) -> Path:
+    return cache_file(path, "h264").with_suffix(".mp4")
+
+
+def ffmpeg_thumb(path: Path, out: Path) -> bool:
+    exe = ffmpeg_exe()
+    if not exe:
+        return False
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(out.stem + ".part.jpg")
+    for ss in ("1", "0"):   # 1초 지점, 짧은 영상이면 맨 앞
+        try:
+            subprocess.run(
+                [exe, "-hide_banner", "-loglevel", "error", "-y", "-ss", ss, "-i", str(path), "-frames:v", "1",
+                 "-vf", "scale='min(480,iw)':-2", "-q:v", "4", str(tmp)],
+                capture_output=True, timeout=60, creationflags=_NO_WINDOW,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if tmp.exists() and tmp.stat().st_size > 0:
+            os.replace(tmp, out)
+            return True
+    return False
+
+
+class PreviewJobs:
+    """동영상 변환 작업. 한 번에 하나씩, 진행률을 기록한다."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.jobs: dict[str, dict] = {}
+        self.queue: list[Path] = []
+        self.running = False
+        self.procs: list[subprocess.Popen] = []
+
+    def status(self, path: Path) -> dict:
+        if preview_file(path).exists():
+            return {"state": "ready", "progress": 100}
+        with self.lock:
+            j = self.jobs.get(str(path))
+            return dict(j) if j else {"state": "none", "progress": 0}
+
+    def start(self, path: Path) -> dict:
+        st = self.status(path)
+        if st["state"] in ("ready", "running", "queued"):
+            return st
+        if not ffmpeg_exe():
+            return {"state": "error", "progress": 0, "error": "변환 도구(ffmpeg)를 찾을 수 없습니다"}
+        with self.lock:
+            self.jobs[str(path)] = {"state": "queued", "progress": 0}
+            self.queue.append(path)
+            if not self.running:
+                self.running = True
+                threading.Thread(target=self._worker, daemon=True).start()
+        return self.status(path)
+
+    def _worker(self):
+        while True:
+            with self.lock:
+                if not self.queue:
+                    self.running = False
+                    return
+                path = self.queue.pop(0)
+                self.jobs[str(path)] = {"state": "running", "progress": 0}
+            try:
+                self._convert(path)
+                with self.lock:
+                    self.jobs.pop(str(path), None)
+            except Exception as ex:  # noqa: BLE001
+                with self.lock:
+                    self.jobs[str(path)] = {"state": "error", "progress": 0, "error": str(ex)[:300]}
+
+    def _convert(self, path: Path):
+        out = preview_file(path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_name(out.stem + ".part.mp4")
+        cmd = [ffmpeg_exe(), "-hide_banner", "-nostats", "-y", "-i", str(path),
+               "-map", "0:v:0", "-map", "0:a:0?",
+               "-vf", "scale='min(1280,iw)':-2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+               "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+               "-progress", "pipe:1", str(tmp)]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                encoding="utf-8", errors="replace", creationflags=_NO_WINDOW)
+        self.procs.append(proc)
+        total = [0.0]
+        err_tail: list[str] = []
+
+        def read_err():
+            for line in proc.stderr:
+                m = re.search(r"Duration: (\d+):(\d+):(\d+\.?\d*)", line)
+                if m and not total[0]:
+                    total[0] = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+                err_tail.append(line.strip())
+                del err_tail[:-5]
+
+        t = threading.Thread(target=read_err, daemon=True)
+        t.start()
+        for line in proc.stdout:
+            if line.startswith("out_time_us=") or line.startswith("out_time_ms="):
+                try:
+                    sec = int(line.split("=", 1)[1]) / 1e6
+                except ValueError:
+                    continue
+                if total[0]:
+                    with self.lock:
+                        j = self.jobs.get(str(path))
+                        if j:
+                            j["progress"] = max(0, min(99, int(sec / total[0] * 100)))
+        proc.wait()
+        t.join(timeout=2)
+        self.procs.remove(proc)
+        if proc.returncode != 0 or not tmp.exists():
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError("변환 실패: " + (" / ".join(err_tail[-2:]) or f"code {proc.returncode}"))
+        os.replace(tmp, out)
+
+    def stop_all(self):
+        for p in list(self.procs):
+            try:
+                p.kill()
+            except OSError:
+                pass
+
+
+PREVIEWS = PreviewJobs()
+atexit.register(PREVIEWS.stop_all)
 
 
 # ---------------------------------------------------------------- 동영상 코덱 (MP4/MOV 머리 정보만 읽음)
@@ -621,7 +771,7 @@ def api_thumb():
     if path.is_file() and is_video(path.name):
         # 동영상 첫 화면은 화면 쪽에서 만들어 올려 둔 것을 쓴다 (없으면 404 → 화면이 만들어 올림)
         out = cache_file(path, "v")
-        if not out.exists():
+        if not out.exists() and not ffmpeg_thumb(path, out):
             abort(404, "동영상 첫 화면이 아직 없습니다")
         resp = send_file(out, mimetype="image/jpeg")
         resp.headers["Cache-Control"] = "no-cache"
@@ -669,9 +819,33 @@ def api_video():
     path = safe_path(request.args.get("path"))
     if not path.is_file() or not is_video(path.name):
         abort(415, "동영상 파일이 아닙니다")
+    if request.args.get("preview"):
+        pv = preview_file(path)
+        if not pv.exists():
+            abort(404, "변환된 동영상이 아직 없습니다")
+        resp = send_file(pv, mimetype="video/mp4", conditional=True)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
     resp = send_file(path, mimetype=VIDEO_MIME.get(path.suffix.lower(), "application/octet-stream"), conditional=True)
     resp.headers["Cache-Control"] = "private, max-age=3600"
     return resp
+
+
+@app.post("/api/preview")
+def api_preview_start():
+    """재생할 수 없는 동영상을 재생용(H.264)으로 변환 시작."""
+    path = safe_path(request.args.get("path"))
+    if not path.is_file() or not is_video(path.name):
+        abort(415, "동영상 파일이 아닙니다")
+    return jsonify(PREVIEWS.start(path))
+
+
+@app.get("/api/preview")
+def api_preview_status():
+    path = safe_path(request.args.get("path"))
+    if not path.is_file() or not is_video(path.name):
+        abort(415, "동영상 파일이 아닙니다")
+    return jsonify(PREVIEWS.status(path))
 
 
 @app.post("/api/open")

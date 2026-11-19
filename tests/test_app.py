@@ -238,3 +238,30 @@ def test_open_requires_token_and_media(client, monkeypatch):
     assert client.post("/api/open", json={"path": str(client.day / "memo.txt")}, headers={"X-Token": client.mod.TOKEN}).status_code == 400
     assert client.post("/api/open", json={"path": f}, headers={"X-Token": client.mod.TOKEN}).get_json()["ok"]
     assert opened and opened[0][-1] == f
+
+
+def test_hevc_thumbnail_and_preview_conversion(client):
+    import shutil, time
+    if not client.mod.ffmpeg_exe():
+        pytest.skip("ffmpeg 없음")
+    vid = client.day / "20260904_103455.mp4"
+    shutil.copy(DATA / "hevc_sample.mp4", vid)
+    # 첫 화면은 서버가 ffmpeg로 바로 만든다
+    r = client.get("/api/thumb", query_string={"path": str(vid), "size": "s"})
+    assert r.status_code == 200 and r.mimetype == "image/jpeg"
+    info = client.get("/api/info", query_string={"path": str(vid)}).get_json()["video"]
+    assert info["hevc"] and info["canConvert"] and info["preview"] is False
+    assert client.post("/api/preview", query_string={"path": str(vid)}).status_code == 403
+    st = client.post("/api/preview", query_string={"path": str(vid)}, headers={"X-Token": client.mod.TOKEN}).get_json()
+    assert st["state"] in ("queued", "running", "ready")
+    for _ in range(120):
+        st = client.get("/api/preview", query_string={"path": str(vid)}).get_json()
+        if st["state"] in ("ready", "error"):
+            break
+        time.sleep(0.25)
+    assert st["state"] == "ready", st
+    r = client.get("/api/video", query_string={"path": str(vid), "preview": 1}, headers={"Range": "bytes=0-99"})
+    assert r.status_code == 206 and r.mimetype == "video/mp4"
+    out = client.mod.preview_file(vid)
+    assert client.mod.video_codecs(out)["video"] == "avc1"   # H.264로 바뀜
+    assert vid.read_bytes() == (DATA / "hevc_sample.mp4").read_bytes()   # 원본 그대로
