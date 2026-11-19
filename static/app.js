@@ -1281,7 +1281,8 @@
       if (vid.dataset.p !== p.path) {
         vid.pause();
         vid.dataset.p = p.path;
-        vid.dataset.mode = '';   // '' = 원본 재생, 'preview' = 변환본 재생
+        vid.dataset.mode = '';   // '' = 원본, 'live' = 실시간 변환 재생, 'preview' = 저장된 변환본
+        vid.parentNode.querySelector('.live-badge').hidden = true;
         vid.poster = vthumbUrls.get(p.path) || thumbUrl(p.path, 'm');
         vid.src = '/api/video?path=' + encodeURIComponent(p.path);
       }
@@ -1354,6 +1355,7 @@
 
   // 동영상 플레이어 멈추고 비우기
   function stopVideo(vid) {
+    if (vid) vid.parentNode.querySelector('.live-badge').hidden = true;
     if (!vid || !vid.dataset.p) { if (vid) vid.hidden = true; return; }
     vid.pause(); vid.removeAttribute('src'); vid.removeAttribute('poster'); vid.load();
     vid.dataset.p = ''; vid.hidden = true;
@@ -1391,38 +1393,75 @@
       </div></div>`;
   }
   const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+  // 재생할 수 없는 동영상: 저장용 변환을 시작하고, 끝날 때까지는 실시간 변환 스트림으로 바로 보여 준다.
+  // 저장용 변환이 끝나면 보던 위치 그대로 변환본으로 바꾼다 (그때부터 건너뛰기 가능).
   async function convertAndPlay(vid, np, path, codec) {
-    vid.pause(); vid.hidden = true; np.hidden = false;
-    np.innerHTML = `<div class="vproblem">
-      <strong>${codec ? esc(codec) + ' ' : ''}동영상을 이 프로그램에서 재생할 수 있게 변환하는 중…</strong>
-      <div class="vp-bar"><i style="width:0%"></i></div>
-      <span class="vp-pct">준비 중</span>
-      <span class="muted">한 번 변환하면 저장되어 다음부터는 바로 재생됩니다. 원본 파일은 그대로입니다.</span>
-      <div class="vp-actions"><button class="btn" data-act="open">기본 동영상 프로그램으로 열기</button></div></div>`;
+    const badge = vid.parentNode.querySelector('.live-badge');
     const q = '/api/preview?path=' + encodeURIComponent(path);
+    const progressUi = () => {
+      vid.pause(); vid.hidden = true; np.hidden = false; badge.hidden = true;
+      np.innerHTML = `<div class="vproblem">
+        <strong>${codec ? esc(codec) + ' ' : ''}동영상을 이 프로그램에서 재생할 수 있게 변환하는 중…</strong>
+        <div class="vp-bar"><i style="width:0%"></i></div>
+        <span class="vp-pct">준비 중</span>
+        <span class="muted">한 번 변환하면 저장되어 다음부터는 바로 재생됩니다. 원본 파일은 그대로입니다.</span>
+        <div class="vp-actions"><button class="btn" data-act="open">기본 동영상 프로그램으로 열기</button></div></div>`;
+    };
     let st;
     try { st = await post(q, {}); } catch (e) { st = { state: 'error', error: e.message }; }
+    if (vid.dataset.p !== path) return;
+    if (st.state !== 'ready' && st.state !== 'error' && vid.dataset.mode !== 'live-failed') {
+      // 실시간 변환 재생 시작
+      vid.dataset.mode = 'live';
+      np.hidden = true; vid.hidden = false;
+      vid.src = `/api/video?live=1&path=${encodeURIComponent(path)}`;
+      badge.hidden = false;
+    } else if (st.state !== 'ready') {
+      progressUi();
+    }
     while (vid.dataset.p === path) {
       if (st.state === 'ready') {
+        const live = vid.dataset.mode === 'live';
+        const t = live ? vid.currentTime : 0, playing = live && !vid.paused;
         vid.dataset.mode = 'preview';
+        badge.hidden = true;
         np.hidden = true; vid.hidden = false;
+        if (live) {
+          vid.addEventListener('loadedmetadata', () => {
+            if (vid.dataset.p !== path) return;
+            vid.currentTime = Math.min(t, vid.duration || t);
+            if (playing) vid.play().catch(() => {});
+          }, { once: true });
+        }
         vid.src = `/api/video?preview=1&path=${encodeURIComponent(path)}`;
         return;
       }
       if (st.state === 'error') {
+        badge.hidden = true;
+        if (vid.dataset.mode === 'live') { badge.hidden = false; badge.innerHTML = '실시간 변환 재생 중 · 저장용 변환 실패 (건너뛰기 불가)'; return; }
+        vid.hidden = true; np.hidden = false;
         np.innerHTML = `<div class="vproblem"><strong>변환하지 못했습니다.</strong><span class="muted">${esc(st.error || '')}</span>
           <div class="vp-actions"><button class="btn" data-act="open">기본 동영상 프로그램으로 열기</button></div></div>`;
         return;
       }
-      const bar = np.querySelector('.vp-bar i'), pct = np.querySelector('.vp-pct');
-      if (bar) bar.style.width = `${st.progress || 0}%`;
-      if (pct) pct.textContent = st.state === 'queued' ? '다른 동영상 변환을 기다리는 중' : `${st.progress || 0}%`;
+      const pctText = st.state === 'queued' ? '대기 중' : `${st.progress || 0}%`;
+      if (vid.dataset.mode === 'live') {
+        badge.innerHTML = `<b>실시간 변환 재생</b> · 저장용 변환 ${pctText} — 끝나면 건너뛰기 가능`;
+      } else {
+        if (!np.querySelector('.vp-bar')) progressUi();
+        const bar = np.querySelector('.vp-bar i'), pct = np.querySelector('.vp-pct');
+        if (bar) bar.style.width = `${st.progress || 0}%`;
+        if (pct) pct.textContent = st.state === 'queued' ? '다른 동영상 변환을 기다리는 중' : pctText;
+      }
       await sleepMs(600);
       try { st = await api(q); } catch (e) { st = { state: 'error', error: e.message }; }
     }
   }
   for (const [vid, np] of [[$('big-video'), $('big-noprev')], [$('fs-video'), $('fs-noprev')]]) {
-    vid.addEventListener('error', () => showVideoProblem(vid, np, 'error'));
+    vid.addEventListener('error', () => {
+      if (vid.dataset.mode === 'live') { vid.dataset.mode = 'live-failed'; vid.parentNode.querySelector('.live-badge').hidden = true; return; }
+      showVideoProblem(vid, np, 'error');
+    });
     np.addEventListener('click', (ev) => {
       const b = ev.target.closest('[data-act]');
       if (!b) return;

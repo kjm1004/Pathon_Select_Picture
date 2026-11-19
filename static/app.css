@@ -318,6 +318,9 @@ button { cursor: pointer; }
 .big .noprev, .fs-stage .noprev { position: relative; z-index: 2; width: min(640px, 92%); aspect-ratio: auto; min-height: 220px; }
 .vproblem { display: flex; flex-direction: column; gap: 10px; line-height: 1.6; font-size: 14px; color: var(--text2); }
 .vproblem strong { color: var(--text); font-size: 15px; }
+.live-badge { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 3; padding: 5px 12px; border-radius: 999px;
+  background: rgba(18,20,23,.85); border: 1px solid #35507A; color: var(--text2); font-size: 12px; white-space: nowrap; pointer-events: none; }
+.live-badge b { color: var(--blue-t); font-weight: 700; }
 .vp-bar { height: 8px; border-radius: 4px; background: #2A2E34; overflow: hidden; }
 .vp-bar i { display: block; height: 100%; background: var(--blue); transition: width .4s; }
 .vp-pct { font-variant-numeric: tabular-nums; color: var(--text); }

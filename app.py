@@ -28,7 +28,7 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 from PIL import ExifTags, Image, ImageOps
 
 try:  # HEIC(아이폰 사진) 지원은 선택 사항
@@ -465,6 +465,56 @@ class PreviewJobs:
 PREVIEWS = PreviewJobs()
 atexit.register(PREVIEWS.stop_all)
 
+# 실시간 변환 재생: 변환하면서 바로 보내 준다 (조각 MP4). 한 번에 하나만 — 다른 동영상으로 넘어가면 이전 것은 끝낸다.
+_live_lock = threading.Lock()
+_live_proc: list[subprocess.Popen] = []
+
+
+def _stop_live():
+    with _live_lock:
+        for p in _live_proc:
+            try:
+                p.kill()
+                p.wait(timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        _live_proc.clear()
+
+
+atexit.register(_stop_live)
+
+
+def live_stream(path: Path):
+    exe = ffmpeg_exe()
+    cmd = [exe, "-hide_banner", "-loglevel", "error", "-i", str(path),
+           "-map", "0:v:0", "-map", "0:a:0?",
+           "-vf", "scale='min(1280,iw)':-2", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+           "-crf", "26", "-g", "48", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+           "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "pipe:1"]
+    _stop_live()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW)
+    with _live_lock:
+        _live_proc.append(proc)
+
+    def gen():
+        try:
+            while True:
+                chunk = proc.stdout.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:   # 화면이 연결을 끊으면(다른 사진으로 이동 등) 변환도 멈춘다
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            with _live_lock:
+                if proc in _live_proc:
+                    _live_proc.remove(proc)
+
+    return gen()
+
 
 # ---------------------------------------------------------------- 동영상 코덱 (MP4/MOV 머리 정보만 읽음)
 CODEC_NAMES = {
@@ -819,6 +869,13 @@ def api_video():
     path = safe_path(request.args.get("path"))
     if not path.is_file() or not is_video(path.name):
         abort(415, "동영상 파일이 아닙니다")
+    if request.args.get("live"):
+        if not ffmpeg_exe():
+            abort(415, "변환 도구(ffmpeg)를 찾을 수 없습니다")
+        resp = Response(live_stream(path), mimetype="video/mp4", direct_passthrough=True)
+        resp.headers["Cache-Control"] = "no-store"
+        resp.headers["Accept-Ranges"] = "none"
+        return resp
     if request.args.get("preview"):
         pv = preview_file(path)
         if not pv.exists():

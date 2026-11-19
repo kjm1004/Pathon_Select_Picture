@@ -265,3 +265,17 @@ def test_hevc_thumbnail_and_preview_conversion(client):
     out = client.mod.preview_file(vid)
     assert client.mod.video_codecs(out)["video"] == "avc1"   # H.264로 바뀜
     assert vid.read_bytes() == (DATA / "hevc_sample.mp4").read_bytes()   # 원본 그대로
+
+
+def test_live_stream_starts_quickly(client):
+    import shutil
+    if not client.mod.ffmpeg_exe():
+        pytest.skip("ffmpeg 없음")
+    vid = client.day / "live.mp4"
+    shutil.copy(DATA / "hevc_sample.mp4", vid)
+    r = client.get("/api/video", query_string={"path": str(vid), "live": 1})
+    assert r.status_code == 200 and r.mimetype == "video/mp4" and r.headers["Accept-Ranges"] == "none"
+    data = r.get_data()
+    assert data[4:8] == b"ftyp" and b"moof" in data          # 조각 MP4
+    assert client.mod.video_codecs  # noqa: 존재 확인
+    client.mod._stop_live()
