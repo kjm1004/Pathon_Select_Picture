@@ -279,3 +279,16 @@ def test_live_stream_starts_quickly(client):
     assert data[4:8] == b"ftyp" and b"moof" in data          # 조각 MP4
     assert client.mod.video_codecs  # noqa: 존재 확인
     client.mod._stop_live()
+
+
+def test_reveal_folder_and_file(client, monkeypatch):
+    opened = []
+    monkeypatch.setattr(client.mod.subprocess, "Popen", lambda args: opened.append(args))
+    monkeypatch.setattr(client.mod.os, "startfile", lambda p: opened.append([p]), raising=False)
+    tok = {"X-Token": client.mod.TOKEN}
+    assert client.post("/api/reveal", json={"path": str(client.day)}).status_code == 403
+    assert client.post("/api/reveal", json={"path": str(client.day / "없음")}, headers=tok).status_code == 400
+    assert client.post("/api/reveal", json={"path": str(client.day / "memo.txt")}, headers=tok).status_code == 400
+    assert client.post("/api/reveal", json={"path": str(client.day)}, headers=tok).get_json()["ok"]
+    assert client.post("/api/reveal", json={"path": str(client.day / "IMG_0.JPG")}, headers=tok).get_json()["ok"]
+    assert len(opened) == 2

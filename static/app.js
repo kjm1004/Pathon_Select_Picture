@@ -799,6 +799,50 @@
     if (!clickedChevron && !(state.fs && !n.count)) openFolder(n.path);
   });
 
+  // 폴더 이름이 잘려 보이면 마우스를 올렸을 때 전체 이름을 바로 보여 준다
+  const tip = $('tip');
+  $('tree').addEventListener('mouseover', (ev) => {
+    const btn = ev.target.closest('.node');
+    if (!btn) return;
+    const n = state.nodes.get(btn.dataset.path);
+    const nm = btn.querySelector('.nm');
+    if (!n || !nm) return;
+    const cut = nm.scrollWidth > nm.clientWidth + 1;
+    const info = n.count ? `사진·동영상 ${n.count}개 · ${fmtSize(n.size || 0)}` : '';
+    if (!cut && !info) { tip.hidden = true; return; }
+    tip.innerHTML = `${esc(n.name)}${info ? `<small>${info} · 우클릭: 탐색기에서 열기</small>` : '<small>우클릭: 탐색기에서 열기</small>'}`;
+    tip.hidden = false;
+    const r = nm.getBoundingClientRect(), rb = btn.getBoundingClientRect();
+    tip.style.left = `${Math.max(8, r.left - 8)}px`;
+    const top = rb.bottom + 4;
+    tip.style.top = `${top + tip.offsetHeight > innerHeight - 8 ? rb.top - tip.offsetHeight - 4 : top}px`;
+  });
+  $('tree').addEventListener('mouseleave', () => { tip.hidden = true; });
+  $('tree').addEventListener('scroll', () => { tip.hidden = true; }, { passive: true });
+
+  // 폴더를 우클릭하면 탐색기로 연다
+  async function revealInExplorer(path, label) {
+    try { await post('/api/reveal', { path }); toast(`탐색기에서 열었습니다: ${label}`); } catch (e) { toast(e.message, true); }
+  }
+  $('tree').addEventListener('contextmenu', (ev) => {
+    const btn = ev.target.closest('.node');
+    if (!btn) return;
+    ev.preventDefault();
+    tip.hidden = true;
+    revealInExplorer(btn.dataset.path, state.nodes.get(btn.dataset.path).name);
+  });
+  // 사진(인덱스·바둑판·나란히)을 우클릭하면 그 파일이 선택된 탐색기
+  for (const id of ['strip', 'grid', 'multi']) {
+    $(id).addEventListener('contextmenu', (ev) => {
+      const el = ev.target.closest('[data-i]');
+      if (!el) return;
+      const p = state.photos[+el.dataset.i];
+      if (!p) return;
+      ev.preventDefault();
+      revealInExplorer(p.path, p.name);
+    });
+  }
+
   $('folder-search').addEventListener('input', (e) => { state.q = e.target.value.trim().toLowerCase(); renderTree(); });
   $('root-select').addEventListener('change', (e) => { e.target.blur(); setRoot(e.target.value); });
 
@@ -973,8 +1017,22 @@
 
   $('strip').addEventListener('click', (ev) => {
     const b = ev.target.closest('.ix');
-    if (b) setFocus(+b.dataset.i);
+    if (b) { setFocus(+b.dataset.i); centerMain(); }
   });
+
+  // 메인 창에서 현재 사진을 가운데로 (나란히: 가운데 칸, 바둑판: 가운데 줄)
+  function centerMain() {
+    if (state.view === 'multi') {
+      const pitch = multiPitch();
+      if (!pitch) return;
+      const n = Math.min(state.nup, state.photos.length);
+      const start = Math.max(0, Math.min(state.photos.length - n, Math.round(state.focus - (n - 1) / 2)));
+      multiKinetic.animateTo(start * pitch, 200);
+    } else if (state.view === 'grid') {
+      const g = state.gridEls[state.focus];
+      if (g) g.scrollIntoView({ block: 'center', behavior: smooth().dur ? 'smooth' : 'auto' });
+    }
+  }
   $('strip').addEventListener('dblclick', (ev) => {
     const b = ev.target.closest('.ix');
     if (b) { setFocus(+b.dataset.i); openFs(); }

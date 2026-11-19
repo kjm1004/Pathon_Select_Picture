@@ -924,6 +924,30 @@ def api_open():
     return jsonify(ok=True)
 
 
+@app.post("/api/reveal")
+def api_reveal():
+    """폴더를 탐색기로 연다. 파일이면 그 파일이 선택된 상태로 폴더를 연다."""
+    data = request.get_json(silent=True) or {}
+    p = Path(str(data.get("path") or ""))
+    if not p.is_absolute() or not p.exists():
+        abort(400, "경로를 찾을 수 없습니다")
+    if p.is_file() and not is_photo(p.name):
+        abort(400, "열 수 없는 파일입니다")
+    try:
+        if os.name == "nt":
+            if p.is_dir():
+                os.startfile(str(p))  # noqa: S606 — 폴더는 탐색기로 열림
+            else:
+                subprocess.Popen(["explorer", "/select,", str(p)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(p)] if p.is_file() else ["open", str(p)])
+        else:
+            subprocess.Popen(["xdg-open", str(p if p.is_dir() else p.parent)])
+    except OSError as ex:
+        abort(400, f"열지 못했습니다: {ex}")
+    return jsonify(ok=True)
+
+
 @app.post("/api/vthumb")
 def api_vthumb():
     """화면이 동영상에서 뽑은 첫 화면(JPEG)을 썸네일 캐시에 저장한다."""

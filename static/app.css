@@ -339,6 +339,11 @@ img.vimg.broken { display: none; }
 /* 번호·삭제·별점 표시는 동영상 썸네일 위에 */
 .cell .tag, .cell .del, .mcell .tag, .mcell .del, .ix .x, .ix .rb, .ix .num { z-index: 3; }
 
+/* ---------- 폴더 이름 말풍선 ---------- */
+.tip { position: fixed; z-index: 50; max-width: min(640px, calc(100vw - 24px)); padding: 6px 10px; border-radius: 6px;
+  background: #E6E8EB; color: #121417; font-size: 13px; line-height: 1.4; box-shadow: 0 4px 16px rgba(0,0,0,.5); pointer-events: none; word-break: break-all; }
+.tip small { display: block; color: #4A505A; font-size: 11px; margin-top: 2px; }
+
 @media (max-width: 700px) {
   .body { flex-wrap: wrap; overflow: auto; }
   .sidebar { flex: 1 1 100%; width: auto; }
