@@ -315,6 +315,11 @@ button { cursor: pointer; }
 .mvideo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; z-index: 1; }
 .big.marked .mvideo, .fs-stage.marked .mvideo { opacity: .4; }
 .big .mark-pill, .fs-stage .mark-pill { z-index: 2; }
+.big .noprev, .fs-stage .noprev { position: relative; z-index: 2; width: min(640px, 92%); aspect-ratio: auto; min-height: 220px; }
+.vproblem { display: flex; flex-direction: column; gap: 10px; line-height: 1.6; font-size: 14px; color: var(--text2); }
+.vproblem strong { color: var(--text); font-size: 15px; }
+.vp-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 4px; }
+.vp-actions .btn { height: 34px; }
 img.vimg { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: contain; }
 img.vimg.broken { display: none; }
 .play { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2; width: 34px; height: 34px; border-radius: 50%;

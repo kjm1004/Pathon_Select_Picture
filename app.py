@@ -17,6 +17,8 @@ import os
 import secrets
 import sqlite3
 import string
+import struct
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -281,6 +283,9 @@ def read_info(path: Path) -> dict:
         "width": None,
         "height": None,
     }
+    if is_video(path.name):
+        info["video"] = video_codecs(path)
+        return info
     if path.suffix.lower() not in VIEWABLE_EXT:
         return info
     try:
@@ -309,6 +314,72 @@ def read_info(path: Path) -> dict:
     except Exception:
         pass
     return info
+
+
+# ---------------------------------------------------------------- 동영상 코덱 (MP4/MOV 머리 정보만 읽음)
+CODEC_NAMES = {
+    "hvc1": "HEVC (H.265)", "hev1": "HEVC (H.265)", "dvh1": "Dolby Vision (HEVC)", "dvhe": "Dolby Vision (HEVC)",
+    "avc1": "H.264", "avc3": "H.264", "av01": "AV1", "vp09": "VP9", "vp08": "VP8", "mp4v": "MPEG-4",
+    "apch": "ProRes", "apcn": "ProRes", "apcs": "ProRes", "apco": "ProRes", "ap4h": "ProRes",
+    "mp4a": "AAC", "ac-3": "AC-3", "ec-3": "E-AC-3", "Opus": "Opus", "alac": "ALAC", "samr": "AMR",
+}
+HEVC_CODECS = {"hvc1", "hev1", "dvh1", "dvhe"}
+
+
+def _boxes(f, start, end):
+    pos = start
+    while pos + 8 <= end:
+        f.seek(pos)
+        hdr = f.read(8)
+        if len(hdr) < 8:
+            return
+        size, typ = struct.unpack(">I4s", hdr)
+        hlen = 8
+        if size == 1:
+            size = struct.unpack(">Q", f.read(8))[0]
+            hlen = 16
+        elif size == 0:
+            size = end - pos
+        if size < hlen:
+            return
+        yield typ.decode("latin1"), pos + hlen, min(pos + size, end)
+        pos += size
+
+
+def video_codecs(path: Path) -> dict | None:
+    """MP4/MOV 파일의 영상·소리 코덱. {'video': 'hvc1', 'videoName': 'HEVC (H.265)', 'audio': ..., 'hevc': bool}"""
+    if path.suffix.lower() not in (".mp4", ".mov", ".m4v", ".3gp"):
+        return None
+    found = {}
+    try:
+        with open(path, "rb") as f:
+            end = os.fstat(f.fileno()).st_size
+
+            def walk(s, e, depth, track):
+                for t, s2, e2 in _boxes(f, s, e):
+                    if t in ("moov", "trak", "mdia", "minf", "stbl") and depth < 6:
+                        tr = {} if t == "trak" else track
+                        walk(s2, e2, depth + 1, tr)
+                        if t == "trak" and tr.get("handler") in ("vide", "soun") and tr.get("codec"):
+                            found.setdefault(tr["handler"], tr["codec"])
+                    elif t == "hdlr" and track is not None:
+                        f.seek(s2 + 8)
+                        track["handler"] = f.read(4).decode("latin1")
+                    elif t == "stsd" and track is not None:
+                        f.seek(s2 + 12)
+                        track["codec"] = f.read(4).decode("latin1")
+
+            walk(0, end, 0, None)
+    except (OSError, struct.error):
+        return None
+    if not found:
+        return None
+    v, a = found.get("vide"), found.get("soun")
+    return {
+        "video": v, "videoName": CODEC_NAMES.get(v or "", v),
+        "audio": a, "audioName": CODEC_NAMES.get(a or "", a),
+        "hevc": v in HEVC_CODECS,
+    }
 
 
 def _num(v):
@@ -601,6 +672,25 @@ def api_video():
     resp = send_file(path, mimetype=VIDEO_MIME.get(path.suffix.lower(), "application/octet-stream"), conditional=True)
     resp.headers["Cache-Control"] = "private, max-age=3600"
     return resp
+
+
+@app.post("/api/open")
+def api_open():
+    """사진·동영상을 Windows에 연결된 기본 프로그램으로 연다."""
+    data = request.get_json(silent=True) or {}
+    p = Path(str(data.get("path") or ""))
+    if not p.is_absolute() or not p.is_file() or not is_photo(p.name):
+        abort(400, "열 수 없는 파일입니다")
+    try:
+        if os.name == "nt":
+            os.startfile(str(p))  # noqa: S606 — 사용자가 고른 사진/동영상 파일만
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(p)])
+        else:
+            subprocess.Popen(["xdg-open", str(p)])
+    except OSError as ex:
+        abort(400, f"열지 못했습니다: {ex}")
+    return jsonify(ok=True)
 
 
 @app.post("/api/vthumb")

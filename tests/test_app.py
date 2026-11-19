@@ -214,3 +214,25 @@ def test_video_stream_range_and_client_thumbnail(client):
     tok = {"X-Token": client.mod.TOKEN}
     assert client.post("/api/rating", json={"paths": [str(vid)], "stars": 4}, headers=tok).status_code == 200
     assert len(client.post("/api/delete", json={"paths": [str(vid)], "permanent": True}, headers=tok).get_json()["deleted"]) == 1
+
+
+DATA = Path(__file__).resolve().parent / "data"
+
+
+def test_video_codec_detection(client):
+    import shutil
+    for name, codec, hevc in [("hevc_sample.mp4", "HEVC (H.265)", True), ("h264_sample.mp4", "H.264", False)]:
+        dst = client.day / name
+        shutil.copy(DATA / name, dst)
+        v = client.get("/api/info", query_string={"path": str(dst)}).get_json()["video"]
+        assert v["videoName"] == codec and v["hevc"] is hevc and v["audioName"] == "AAC"
+
+
+def test_open_requires_token_and_media(client, monkeypatch):
+    opened = []
+    monkeypatch.setattr(client.mod.subprocess, "Popen", lambda args: opened.append(args))
+    f = str(client.day / "IMG_0.JPG")
+    assert client.post("/api/open", json={"path": f}).status_code == 403
+    assert client.post("/api/open", json={"path": str(client.day / "memo.txt")}, headers={"X-Token": client.mod.TOKEN}).status_code == 400
+    assert client.post("/api/open", json={"path": f}, headers={"X-Token": client.mod.TOKEN}).get_json()["ok"]
+    assert opened and opened[0][-1] == f

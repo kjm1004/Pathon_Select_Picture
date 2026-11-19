@@ -579,6 +579,7 @@
       ['폴더', folder],
       ['크기', fmtSize(p.size)],
       ['종류', p.video ? `동영상 (${extOf(p.name)})` : null],
+      ['코덱', info && info.video ? [info.video.videoName, info.video.audioName].filter(Boolean).join(' / ') : null],
       ['길이', vm ? fmtDur(vm.duration) : null],
       ['해상도', info && info.width ? `${info.width} × ${info.height} (${((info.width * info.height) / 1e6).toFixed(1)}MP)` : vm && vm.w ? `${vm.w} × ${vm.h}` : null],
       ['형식', info && info.format ? info.format : extOf(p.name)],
@@ -1357,13 +1358,50 @@
     vid.dataset.p = ''; vid.hidden = true;
   }
   // 재생할 수 없는 동영상이면 안내
+  const HEVC_STORE = 'https://apps.microsoft.com/detail/9n4wgh0z6vhq';
+  // 재생할 수 없거나 소리만 나는 동영상: 멈추고 원인과 방법을 보여 준다
+  async function showVideoProblem(vid, np, kind) {
+    const path = vid.dataset.p;
+    if (!path) return;
+    vid.pause();
+    vid.hidden = true;
+    np.hidden = false;
+    np.innerHTML = '<span class="muted">동영상 정보를 확인하는 중…</span>';
+    let v = null;
+    try { v = (await getInfo({ path })).video; } catch (_) { /* 무시 */ }
+    if (vid.dataset.p !== path) return;
+    const codec = v && v.videoName ? v.videoName : null;
+    let msg;
+    if (v && v.hevc) {
+      msg = `<strong>이 동영상은 ${esc(codec)} 코덱으로 찍혀 있어 화면이 나오지 않습니다.</strong>
+        <span>휴대폰의 '고효율 동영상'이나 고화질(4K·HDR) 촬영에서 쓰는 형식입니다.<br>
+        Windows에 <b>HEVC 비디오 확장</b>을 설치하면 이 프로그램에서도 재생될 수 있습니다 (그래픽 카드가 지원해야 함).</span>`;
+    } else if (kind === 'novideo') {
+      msg = `<strong>소리만 재생되고 화면을 표시할 수 없는 동영상입니다${codec ? ` (${esc(codec)})` : ''}.</strong>`;
+    } else {
+      msg = `<strong>${esc(extOf(path))} 동영상은 이 프로그램에서 재생할 수 없습니다${codec ? ` (${esc(codec)})` : ''}.</strong>`;
+    }
+    np.innerHTML = `<div class="vproblem">${msg}
+      <div class="vp-actions">
+        <button class="btn" data-act="open">기본 동영상 프로그램으로 열기</button>
+        ${v && v.hevc ? '<button class="btn" data-act="hevc">HEVC 확장 설치 안내</button>' : ''}
+      </div></div>`;
+  }
   for (const [vid, np] of [[$('big-video'), $('big-noprev')], [$('fs-video'), $('fs-noprev')]]) {
-    vid.addEventListener('error', () => {
-      if (!vid.dataset.p) return;
-      vid.hidden = true; np.hidden = false;
-      np.textContent = `${extOf(vid.dataset.p)} 동영상은 이 프로그램에서 재생할 수 없습니다 (Windows 동영상 플레이어로 열어 보세요)`;
+    vid.addEventListener('error', () => showVideoProblem(vid, np, 'error'));
+    np.addEventListener('click', (ev) => {
+      const b = ev.target.closest('[data-act]');
+      if (!b) return;
+      ev.stopPropagation();
+      const path = vid.dataset.p;
+      if (b.dataset.act === 'open' && path) post('/api/open', { path }).catch((e) => toast(e.message, true));
+      if (b.dataset.act === 'hevc') {
+        if (desktop()) window.pywebview.api.open_url(HEVC_STORE).catch(() => {});
+        else window.open(HEVC_STORE, '_blank', 'noopener');
+      }
     });
     vid.addEventListener('loadedmetadata', () => {
+      if (vid.dataset.p && vid.videoWidth === 0) { showVideoProblem(vid, np, 'novideo'); return; }   // 소리만 나는 경우
       vmeta.set(vid.dataset.p, { duration: vid.duration, w: vid.videoWidth, h: vid.videoHeight });
       const cur = state.photos[state.focus];
       if (cur && cur.path === vid.dataset.p) renderMeta(cur);
@@ -1463,7 +1501,7 @@
     if (p.dir) parts.push(p.dir);
     parts.push(i && i.taken ? i.taken : p.mtime);
     const vm = p.video && vmeta.get(p.path);
-    if (p.video) parts.push('동영상' + (vm ? ` ${fmtDur(vm.duration)} · ${vm.w}×${vm.h}` : ''));
+    if (p.video) parts.push('동영상' + (vm ? ` ${fmtDur(vm.duration)}${vm.w ? ` · ${vm.w}×${vm.h}` : ''}` : ''));
     if (i && i.width) parts.push(`${i.width}×${i.height}`);
     parts.push(fmtSize(p.size));
     if (i && i.camera) parts.push(i.camera);
