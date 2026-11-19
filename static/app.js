@@ -1225,14 +1225,13 @@
   // 마우스가 창 밖으로 나가면 닫기
   document.addEventListener('mouseleave', () => { reveal('left', false); reveal('right', false); });
 
-  // 창이 최대화(또는 전체 화면)되었는지: 화면 작업 영역을 거의 다 차지하면 최대화로 본다
+  // 숨겨 둔 메뉴/속성 창은 창 크기와 상관없이 화면 끝에서 꺼낼 수 있다.
+  // (예전에는 창 최대화를 크기로 판단했는데, Windows 창은 제목 표시줄 때문에 최대화로 인식되지 않았다.
+  //  창 크기 조절 테두리는 프로그램 화면 바깥쪽에 있어서 안쪽 가장자리와 겹치지 않는다.)
   const edgeTop = () => Math.round(document.querySelector('.topbar').getBoundingClientRect().bottom);
   function updateMaxMode() {
-    const max = !!document.fullscreenElement
-      || (screen.availWidth - window.outerWidth <= 16 && screen.availHeight - window.outerHeight <= 16);
-    appEl.classList.toggle('max-mode', max);
+    appEl.classList.add('max-mode');
     appEl.style.setProperty('--edge-top', `${edgeTop()}px`);
-    if (!max && !state.fs) appEl.classList.remove('reveal-left', 'reveal-right');
   }
   window.addEventListener('resize', updateMaxMode);
   updateMaxMode();
