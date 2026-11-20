@@ -689,6 +689,40 @@
   $('index-btn').addEventListener('click', () => setIndexBar(!indexShown()));
   $('sidebar-btn').addEventListener('click', () => setSidebar(!sidebarShown()));
 
+  // ------------------------------------------------------------ 새로고침 (F5)
+  // 폴더 목록·개수·크기, 지금 폴더의 사진 목록, 별점 모아 보기를 다시 읽는다. 펼친 폴더와 보던 사진은 유지.
+  let refreshing = false;
+  async function refreshAll() {
+    if (refreshing || !state.root) return;
+    refreshing = true;
+    $('refresh-btn').classList.add('spin');
+    const openPaths = [...state.nodes.values()].filter((n) => n.open).map((n) => n.path)
+      .sort((a, b) => a.length - b.length);   // 위쪽 폴더부터 다시 펼친다
+    const cur = state.photos[state.focus];
+    const curName = cur ? cur.name : null;
+    try {
+      const data = await api('/api/dirs?path=' + encodeURIComponent(state.root));
+      state.nodes.clear();
+      state.rootChildren = addNodes(data.dirs);
+      $('disk-usage').textContent = data.disk ? `${fmtSize(data.disk.used)} 사용 / ${fmtSize(data.disk.total)}` : '';
+      for (const p of openPaths) {
+        const n = state.nodes.get(p);
+        if (n && n.hasChildren) await expand(n);
+      }
+      renderTree();
+      if (state.collection !== null) await openCollection(state.collection);
+      else if (state.folder) await openFolder(state.folder, state.folder === state.root, curName);
+      refreshSummary();
+      toast('새로고침했습니다');
+    } catch (e) {
+      toast('새로고침하지 못했습니다: ' + e.message, true);
+    } finally {
+      refreshing = false;
+      $('refresh-btn').classList.remove('spin');
+    }
+  }
+  $('refresh-btn').addEventListener('click', refreshAll);
+
   // ------------------------------------------------------------ 탐색기
   async function setRoot(path, restoreFolder, restorePhoto) {
     state.root = path;
@@ -1084,6 +1118,7 @@
         </button>
         <div class="mrow">
           <span class="nm" title="${esc(p.name)}">${esc(p.name)}</span>
+          <span class="msz">${fmtSize(p.size)}</span>
           <span class="stars mstars"></span>
           <button class="mtoggle" data-i="${i}"></button>
         </div>
@@ -1764,6 +1799,7 @@
     else if ((ev.key === 'b' || ev.key === 'B' || ev.key === 'ㅠ') && !ev.ctrlKey && !state.fs) { ev.preventDefault(); setSidebar(!sidebarShown()); }
     else if ((ev.key === 'i' || ev.key === 'I' || ev.key === 'ㅑ') && !ev.ctrlKey && !state.fs) { ev.preventDefault(); setIndexBar(!indexShown()); }
     else if ((ev.key === 'p' || ev.key === 'P' || ev.key === 'ㅔ') && !ev.ctrlKey && !state.fs) { ev.preventDefault(); setInfoPanel(!infoShown()); }
+    else if (ev.key === 'F5') { ev.preventDefault(); refreshAll(); }   // 화면 전체 새로고침 대신 폴더 정보만
     else if (/^[0-5]$/.test(ev.key) && !ev.ctrlKey && !ev.altKey) {
       ev.preventDefault();
       if (state.photos.length) {

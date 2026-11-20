@@ -55,7 +55,12 @@
         <div class="collect-head">별점 모아 보기 <span class="muted">(드라이브 전체)</span></div>
         <div id="collect"></div>
       </div>
-      <div class="tree-head">폴더</div>
+      <div class="tree-head">
+        <span>폴더</span>
+        <button id="refresh-btn" class="icon-btn icon-xs" aria-label="폴더 정보 새로고침 (F5)" title="폴더 정보 새로고침 (F5)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+        </button>
+      </div>
       <div id="tree" class="tree scrolly" role="tree"></div>
     </nav>
 
@@ -231,7 +236,7 @@
         </select>
       </label>
       <div class="set-keys muted">
-        단축키: 휠/← → 이전·다음 · 1~5 별점 · 0 별점 지우기 · Space 삭제 표시 · Ctrl+휠 확대 · Z 맞춤 · F 전체 화면 · B 좌측 메뉴 · I 인덱스 · P 속성 창 · K 동영상 재생/정지<br>인덱스: 파란 테두리 = 현재 사진, 주황 테두리 = 삭제 표시
+        단축키: 휠/← → 이전·다음 · 1~5 별점 · 0 별점 지우기 · Space 삭제 표시 · Ctrl+휠 확대 · Z 맞춤 · F 전체 화면 · B 좌측 메뉴 · I 인덱스 · P 속성 창 · F5 새로고침 · K 동영상 재생/정지<br>인덱스: 파란 테두리 = 현재 사진, 주황 테두리 = 삭제 표시
       </div>
       <div class="dlg-actions"><button id="set-close" class="btn">닫기</button></div>
     </div>

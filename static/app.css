@@ -187,7 +187,11 @@ button { cursor: pointer; }
 .grid.gs-s .cell .stars .star { font-size: 13px; min-width: 18px; }
 .collect { padding: 0 8px 6px; border-bottom: 1px solid var(--line); }
 .collect-head, .tree-head { padding: 6px 6px 4px; font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .04em; }
-.tree-head { padding: 8px 14px 4px; }
+.tree-head { padding: 4px 8px 2px 14px; display: flex; align-items: center; justify-content: space-between; }
+.icon-btn.icon-xs { width: 26px; height: 26px; border-radius: 6px; }
+#refresh-btn.spin svg { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.mcell .mrow .msz { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .crow { width: 100%; display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 4px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text2); font-size: 13px; text-align: left; }
 .crow:hover { background: #1F242A; }
 .crow.sel { background: var(--sel); color: #fff; }
