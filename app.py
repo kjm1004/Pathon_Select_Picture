@@ -742,7 +742,9 @@ def api_photos():
     with os.scandir(folder) as it:
         entries = [e for e in it if e.is_file(follow_symlinks=False) and is_photo(e.name)]
     stars = ratings_in_dir(folder)
-    photos = [photo_entry(e.path, e.stat(), stars.get(rkey(e.path), 0)) for e in sorted(entries, key=lambda e: e.name.lower())]
+    # 사진을 먼저(이름순), 동영상은 맨 뒤에 모아서(이름순)
+    entries.sort(key=lambda e: (is_video(e.name), e.name.lower()))
+    photos = [photo_entry(e.path, e.stat(), stars.get(rkey(e.path), 0)) for e in entries]
     return jsonify(path=str(folder), photos=photos)
 
 
@@ -809,6 +811,7 @@ def api_ratings_collect():
         e["dir"] = os.path.basename(os.path.dirname(path))
         photos.append(e)
     remove_ratings(missing)
+    photos.sort(key=lambda e: e["video"])   # 모아 보기도 동영상은 맨 뒤 (안정 정렬이라 경로 순서 유지)
     return jsonify(root=str(root), stars=stars, photos=photos)
 
 

@@ -292,3 +292,14 @@ def test_reveal_folder_and_file(client, monkeypatch):
     assert client.post("/api/reveal", json={"path": str(client.day)}, headers=tok).get_json()["ok"]
     assert client.post("/api/reveal", json={"path": str(client.day / "IMG_0.JPG")}, headers=tok).get_json()["ok"]
     assert len(opened) == 2
+
+
+def test_videos_listed_after_photos(client):
+    (client.day / "A_clip.mp4").write_bytes(b"\x00" * 100)      # 이름은 사진보다 앞이지만
+    (client.day / "Z_photo.jpg").write_bytes((client.day / "IMG_0.JPG").read_bytes())
+    names = [p["name"] for p in client.get("/api/photos", query_string={"path": str(client.day)}).get_json()["photos"]]
+    assert names == ["IMG_0.JPG", "IMG_1.JPG", "IMG_2.JPG", "Z_photo.jpg", "A_clip.mp4"]
+    tok = {"X-Token": client.mod.TOKEN}
+    client.post("/api/rating", json={"paths": [str(client.day / "A_clip.mp4"), str(client.day / "Z_photo.jpg")], "stars": 5}, headers=tok)
+    c = client.get("/api/ratings/collect", query_string={"root": str(client.root), "stars": 5}).get_json()
+    assert [p["name"] for p in c["photos"]] == ["Z_photo.jpg", "A_clip.mp4"]
