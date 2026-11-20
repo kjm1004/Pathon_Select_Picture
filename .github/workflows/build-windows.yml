@@ -14,15 +14,19 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # video_editor (영상편집 프로그램)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: 패키지 설치
-        run: python -m pip install -r requirements.txt pyinstaller pytest
+        run: python -m pip install -r requirements.txt -r video_editor/requirements.txt pyinstaller pytest
       - name: 테스트
         run: python -m pytest -q
       - name: exe 만들기
         run: pyinstaller --noconfirm --clean --windowed --name PhotoSelect --add-data "static;static" --collect-data imageio_ffmpeg app.py
+      - name: 영상편집 프로그램 exe 만들기 (PhotoSelect 폴더 안에)
+        run: pyinstaller --noconfirm --clean --windowed --name LosslessVideoEditor --distpath dist/PhotoSelect --workpath build/editor video_editor/main.py
       - name: 압축
         run: Compress-Archive -Path dist/PhotoSelect -DestinationPath PhotoSelect-windows.zip
       - uses: actions/upload-artifact@v4

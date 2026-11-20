@@ -1,3 +1,4 @@
+import os
 import importlib
 import sys
 from pathlib import Path
@@ -303,3 +304,28 @@ def test_videos_listed_after_photos(client):
     client.post("/api/rating", json={"paths": [str(client.day / "A_clip.mp4"), str(client.day / "Z_photo.jpg")], "stars": 5}, headers=tok)
     c = client.get("/api/ratings/collect", query_string={"root": str(client.root), "stars": 5}).get_json()
     assert [p["name"] for p in c["photos"]] == ["Z_photo.jpg", "A_clip.mp4"]
+
+
+def test_editor_launch(client, tmp_path, monkeypatch):
+    launched = []
+    monkeypatch.setattr(client.mod.subprocess, "Popen", lambda cmd, **kw: launched.append(cmd))
+    monkeypatch.setattr(client.mod, "SETTINGS_FILE", tmp_path / "settings.json")
+    tok = {"X-Token": client.mod.TOKEN}
+    assert client.post("/api/editor", json={}).status_code == 403
+    # 저장소의 video_editor/main.py 를 같은 파이썬으로 실행
+    assert client.post("/api/editor", json={}, headers=tok).get_json()["ok"]
+    assert launched[-1][-1].endswith(os.path.join("video_editor", "main.py"))
+    vid = client.day / "clip.mp4"
+    vid.write_bytes(b"\x00" * 10)
+    client.post("/api/editor", json={"path": str(vid)}, headers=tok)
+    assert launched[-1][-1] == str(vid)
+    assert client.post("/api/editor", json={"path": str(client.day / "IMG_0.JPG")}, headers=tok).status_code == 400
+    # 설정에 직접 지정한 프로그램이 우선
+    exe = tmp_path / "MyEditor.exe"
+    exe.write_bytes(b"")
+    client.mod.save_settings({"editorPath": str(exe)})
+    client.post("/api/editor", json={}, headers=tok)
+    assert launched[-1] == [str(exe)]
+    # 못 찾으면 404
+    monkeypatch.setattr(client.mod, "find_editor", lambda: None)
+    assert client.post("/api/editor", json={}, headers=tok).status_code == 404

@@ -48,7 +48,7 @@ DATA_DIR = Path(os.environ.get("PHOTO_CLEANER_HOME", Path.home() / ".photo-clean
 CACHE_DIR = Path(os.environ.get("PHOTO_CLEANER_CACHE", DATA_DIR / "cache"))
 SETTINGS_FILE = DATA_DIR / "settings.json"
 RATINGS_DB = DATA_DIR / "ratings.db"
-DEFAULT_SETTINGS = {"root": None, "folder": None, "photo": None, "view": "single", "nup": 2, "gridSize": "m", "sidebar": True, "smooth": 2, "defaultStars": 3, "indexBar": True, "indexSize": "m", "infoPanel": False}
+DEFAULT_SETTINGS = {"root": None, "folder": None, "photo": None, "view": "single", "nup": 2, "gridSize": "m", "sidebar": True, "smooth": 2, "defaultStars": 3, "indexBar": True, "indexSize": "m", "infoPanel": False, "editorPath": None}
 
 # 미리보기를 만들 수 있는 형식
 VIEWABLE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
@@ -927,6 +927,53 @@ def api_open():
     return jsonify(ok=True)
 
 
+# ---------------------------------------------------------------- 영상편집 (별도 프로그램)
+# https://github.com/kjm1004/Python_VideoEditor — 이 저장소의 video_editor 폴더(서브모듈)
+EDITOR_NAME = "LosslessVideoEditor"
+SRC_DIR = Path(__file__).resolve().parent
+
+
+def find_editor() -> list[str] | None:
+    """영상편집 프로그램 실행 명령. 찾는 순서: 설정에 지정한 경로 > exe 옆 > 소스(video_editor/main.py)."""
+    custom = load_settings().get("editorPath")
+    if custom and os.path.isfile(custom):
+        return [sys.executable, custom] if custom.lower().endswith(".py") else [custom]
+    here = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else SRC_DIR
+    for c in (here / EDITOR_NAME / f"{EDITOR_NAME}.exe", here / f"{EDITOR_NAME}.exe"):
+        if c.is_file():
+            return [str(c)]
+    src = SRC_DIR / "video_editor" / "main.py"
+    if src.is_file() and not getattr(sys, "frozen", False):
+        py = Path(sys.executable)
+        if os.name == "nt" and py.name.lower() == "python.exe" and (py.parent / "pythonw.exe").exists():
+            py = py.parent / "pythonw.exe"   # 콘솔 창 없이
+        return [str(py), str(src)]
+    return None
+
+
+@app.post("/api/editor")
+def api_editor():
+    """영상편집 프로그램을 별도로 실행한다. path가 동영상이면 그 파일을 열어서."""
+    data = request.get_json(silent=True) or {}
+    cmd = find_editor()
+    if not cmd:
+        abort(404, "영상편집 프로그램을 찾을 수 없습니다")
+    raw = data.get("path")
+    if raw:
+        p = Path(str(raw))
+        if not p.is_absolute() or not p.is_file() or not is_video(p.name):
+            abort(400, "동영상 파일이 아닙니다")
+        cmd = cmd + [str(p)]
+    flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0   # 별도 프로세스로 (사진정리를 닫아도 계속 실행)
+    try:
+        subprocess.Popen(cmd, cwd=str(Path(cmd[-1] if cmd[-1].endswith(".py") else cmd[0]).parent),
+                         creationflags=flags, close_fds=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as ex:
+        abort(400, f"영상편집 프로그램을 실행하지 못했습니다: {ex}")
+    return jsonify(ok=True, cmd=os.path.basename(cmd[0]))
+
+
 @app.post("/api/reveal")
 def api_reveal():
     """폴더를 탐색기로 연다. 파일이면 그 파일이 선택된 상태로 폴더를 연다."""
@@ -1032,6 +1079,15 @@ class DesktopApi:
 
         kind = getattr(getattr(webview, "FileDialog", None), "FOLDER", None) or webview.FOLDER_DIALOG
         result = self._window.create_file_dialog(kind)
+        if not result:
+            return None
+        return result[0] if isinstance(result, (list, tuple)) else str(result)
+
+    def pick_file(self, label="프로그램 (*.exe)"):
+        import webview
+
+        kind = getattr(getattr(webview, "FileDialog", None), "OPEN", None) or webview.OPEN_DIALOG
+        result = self._window.create_file_dialog(kind, file_types=(label, "모든 파일 (*.*)"))
         if not result:
             return None
         return result[0] if isinstance(result, (list, tuple)) else str(result)

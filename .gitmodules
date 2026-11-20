@@ -1,0 +1,3 @@
+[submodule "video_editor"]
+	path = video_editor
+	url = https://github.com/kjm1004/Python_VideoEditor

@@ -1556,6 +1556,30 @@
     return true;
   }
 
+  // ------------------------------------------------------------ 영상편집 (별도 프로그램)
+  // 지금 보는 항목이 동영상이면 그 파일을 열어서 실행한다
+  async function openEditor() {
+    const cur = state.photos[state.focus];
+    const path = cur && cur.video ? cur.path : null;
+    // 재생 중인 동영상은 멈춘다
+    $('big-video').pause(); $('fs-video').pause();
+    try {
+      await post('/api/editor', path ? { path } : {});
+      toast(path ? `영상편집 프로그램에서 여는 중: ${cur.name}` : '영상편집 프로그램을 실행합니다');
+    } catch (e) {
+      if (!String(e.message).startsWith('영상편집 프로그램을 찾을 수 없습니다')) { toast(e.message, true); return; }
+      // 찾지 못하면 직접 지정
+      if (!window.confirm('영상편집 프로그램(LosslessVideoEditor.exe)을 찾을 수 없습니다.\n프로그램 파일을 직접 지정할까요?')) return;
+      let file = null;
+      if (desktop()) { try { file = await window.pywebview.api.pick_file('영상편집 프로그램 (*.exe;*.py)'); } catch (_) { /* 취소 */ } }
+      else file = window.prompt('영상편집 프로그램 파일 경로 (LosslessVideoEditor.exe 또는 main.py)', '');
+      if (!file) return;
+      await post('/api/settings', { editorPath: file.trim() });
+      openEditor();
+    }
+  }
+  $('editor-btn').addEventListener('click', openEditor);
+
   // ------------------------------------------------------------ 그리기
   function markedPhotos() {
     if (!state.folder) return [];

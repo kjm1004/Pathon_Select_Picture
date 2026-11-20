@@ -10,8 +10,17 @@ if %PYMINOR% GEQ 14 (
   echo        py -3.13 -m venv .venv
   echo.
 )
+rem 영상편집 프로그램(video_editor 폴더) 받기
+if not exist video_editor\main.py git submodule update --init --recursive
 .venv\Scripts\python -m pip install -r requirements.txt pyinstaller || goto :fail
+if exist video_editor\requirements.txt .venv\Scripts\python -m pip install -r video_editor\requirements.txt || goto :fail
 .venv\Scripts\pyinstaller --noconfirm --clean --windowed --name 사진정리 --add-data "static;static" --collect-data imageio_ffmpeg app.py || goto :fail
+rem 영상편집 프로그램도 같은 폴더(dist\사진정리\LosslessVideoEditor)에 만든다
+if exist video_editor\main.py (
+  .venv\Scripts\pyinstaller --noconfirm --clean --windowed --name LosslessVideoEditor --distpath "dist\사진정리" --workpath build\editor video_editor\main.py || goto :fail
+) else (
+  echo [주의] video_editor 폴더가 없어 영상편집 프로그램은 빼고 만듭니다. git submodule update --init 를 실행해 보세요.
+)
 rem build 폴더는 중간 파일이라 지운다 (실행 파일은 dist 폴더에 있음)
 if exist build rmdir /s /q build
 echo.
