@@ -14,18 +14,35 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive   # video_editor (영상편집 프로그램)
+      # 영상편집 프로그램(video_editor 서브모듈). 비공개 저장소면 EDITOR_REPO_TOKEN 비밀값이 있어야 받을 수 있고,
+      # 받지 못하면 영상편집 없이 사진정리만 빌드한다.
+      - name: 영상편집 프로그램 받기
+        shell: bash
+        env:
+          EDITOR_TOKEN: ${{ secrets.EDITOR_REPO_TOKEN }}
+        run: |
+          if [ -n "$EDITOR_TOKEN" ]; then
+            git config --global url."https://x-access-token:${EDITOR_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+          if git submodule update --init --depth=1 video_editor; then
+            echo "EDITOR=1" >> "$GITHUB_ENV"
+          else
+            echo "::warning::영상편집 저장소(Python_VideoEditor)를 받을 수 없어 영상편집 없이 빌드합니다. 저장소를 공개하거나 EDITOR_REPO_TOKEN 비밀값을 추가하세요."
+          fi
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: 패키지 설치
-        run: python -m pip install -r requirements.txt -r video_editor/requirements.txt pyinstaller pytest
+        shell: bash
+        run: |
+          python -m pip install -r requirements.txt pyinstaller pytest
+          if [ "$EDITOR" = "1" ]; then python -m pip install -r video_editor/requirements.txt; fi
       - name: 테스트
         run: python -m pytest -q
       - name: exe 만들기
         run: pyinstaller --noconfirm --clean --windowed --name PhotoSelect --add-data "static;static" --collect-data imageio_ffmpeg app.py
       - name: 영상편집 프로그램 exe 만들기 (PhotoSelect 폴더 안에)
+        if: env.EDITOR == '1'
         run: pyinstaller --noconfirm --clean --windowed --name LosslessVideoEditor --distpath dist/PhotoSelect --workpath build/editor video_editor/main.py
       - name: 압축
         run: Compress-Archive -Path dist/PhotoSelect -DestinationPath PhotoSelect-windows.zip
