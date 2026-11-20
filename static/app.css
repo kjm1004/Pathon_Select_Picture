@@ -379,6 +379,16 @@ img.vimg.broken { display: none; }
 .job .jb i { display: block; height: 100%; background: var(--blue); transition: width .5s; }
 .job .ja { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 4px; align-items: center; }
 
+/* ---------- 폴더 아래 파일 목록 ---------- */
+.frow { width: 100%; display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 10px; border: 0; border-radius: 5px;
+  background: transparent; color: var(--text2); font-size: 12px; text-align: left; }
+button.frow:hover { background: #1F242A; }
+.frow.sel { background: #1D2B3F; color: #fff; }
+.frow .ficon { flex: none; color: #8A9098; } .frow .ficon.vid { color: #8AB4FF; }
+.frow .fn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.frow .fsz { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.frow.more { color: var(--blue-t); }
+
 @media (max-width: 700px) {
   .body { flex-wrap: wrap; overflow: auto; }
   .sidebar { flex: 1 1 100%; width: auto; }

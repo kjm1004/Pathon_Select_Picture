@@ -699,6 +699,7 @@
     $('refresh-btn').classList.add('spin');
     const openPaths = [...state.nodes.values()].filter((n) => n.open).map((n) => n.path)
       .sort((a, b) => a.length - b.length);   // 위쪽 폴더부터 다시 펼친다
+    const filePaths = [...state.nodes.values()].filter((n) => n.showFiles).map((n) => n.path);
     const cur = state.photos[state.focus];
     const curName = cur ? cur.name : null;
     try {
@@ -710,6 +711,7 @@
         const n = state.nodes.get(p);
         if (n && n.hasChildren) await expand(n);
       }
+      for (const p of filePaths) { const n = state.nodes.get(p); if (n) await toggleFiles(n, true); }
       renderTree();
       if (state.collection !== null) await openCollection(state.collection);
       else if (state.folder) await openFolder(state.folder, state.folder === state.root, curName);
@@ -799,6 +801,34 @@
     return (n.children || []).some(matches);
   }
 
+  // 폴더를 더블클릭하면 그 아래에 파일 목록 (크기가 큰 순서)
+  const FILE_ICON = '<svg class="ficon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 17l-5-5-8 8"/></svg>';
+  const VIDEO_ICON = '<svg class="ficon vid" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="M17 10l5-3v10l-5-3z"/></svg>';
+  function fileRows(n, depth) {
+    if (n.filesLoading) return `<div class="frow muted" style="padding-left:${14 + depth * 18}px">파일 목록을 읽는 중…</div>`;
+    const files = n.files || [];
+    if (!files.length) return `<div class="frow muted" style="padding-left:${14 + depth * 18}px">사진·동영상이 없습니다</div>`;
+    const lim = n.fileLimit || 300;
+    const cur = state.photos[state.focus];
+    const out = files.slice(0, lim).map((f) => `<button class="frow${cur && cur.path === f.path ? ' sel' : ''}" data-file="${esc(f.path)}" data-dir="${esc(n.path)}" title="${esc(f.name)} · ${fmtSize(f.size)}" style="padding-left:${14 + depth * 18}px">
+        ${f.video ? VIDEO_ICON : FILE_ICON}<span class="fn">${esc(f.name)}</span><span class="fsz">${fmtSize(f.size)}</span></button>`);
+    if (files.length > lim) out.push(`<button class="frow more" data-more="${esc(n.path)}" style="padding-left:${14 + depth * 18}px">나머지 ${files.length - lim}개 더 보기</button>`);
+    return out.join('');
+  }
+  async function toggleFiles(n, force = null) {
+    n.showFiles = force === null ? !n.showFiles : force;
+    if (!n.showFiles) { renderTree(); return; }
+    if (!n.files) {
+      n.filesLoading = true; renderTree();
+      try {
+        const d = await api('/api/photos?path=' + encodeURIComponent(n.path));
+        n.files = d.photos.slice().sort((a, b) => b.size - a.size || a.name.localeCompare(b.name));
+      } catch (e) { n.files = []; toast(e.message, true); }
+      n.filesLoading = false;
+    }
+    renderTree();
+  }
+
   function renderTree() {
     const rows = [];
     const walk = (paths, depth) => {
@@ -815,6 +845,7 @@
           ${n.loading ? '<span class="cnt">…</span>' : n.count ? `<span class="cnt" title="이 폴더의 사진·동영상 ${n.count}개, ${fmtSize(n.size || 0)}">${n.count}<span class="sz"> · ${fmtSize(n.size || 0)}</span></span>` : ''}
           ${marked ? `<span class="badge" title="삭제 표시">${marked}</span>` : ''}
         </button>`);
+        if (n.showFiles) rows.push(fileRows(n, depth + 1));
         if (open && n.children) walk(n.children, depth + 1);
       }
     };
@@ -823,8 +854,13 @@
   }
 
   $('tree').addEventListener('click', (ev) => {
+    const more = ev.target.closest('[data-more]');
+    if (more) { const n = state.nodes.get(more.dataset.more); n.fileLimit = (n.fileLimit || 300) + 1000; renderTree(); return; }
+    const fr = ev.target.closest('[data-file]');
+    if (fr) { showFileFromTree(fr.dataset.dir, fr.dataset.file); return; }
     const btn = ev.target.closest('.node');
     if (!btn) return;
+    if (ev.detail >= 2) return;   // 더블클릭의 두 번째 클릭은 무시 (더블클릭은 아래에서 처리)
     const n = state.nodes.get(btn.dataset.path);
     const clickedChevron = ev.target.closest('.chev');
     if (n.hasChildren) {
@@ -834,6 +870,21 @@
     // 전체 화면에서는 사진이 없는 폴더(연도 폴더 등)는 펼치기만 한다 (빈 폴더를 열면 전체 화면이 닫히므로)
     if (!clickedChevron && !(state.fs && !n.count)) openFolder(n.path);
   });
+
+  $('tree').addEventListener('dblclick', (ev) => {
+    const btn = ev.target.closest('.node');
+    if (!btn) return;
+    const n = state.nodes.get(btn.dataset.path);
+    if (n) toggleFiles(n);
+  });
+  // 트리의 파일을 누르면 그 사진을 메인 창에 (다른 폴더면 그 폴더를 연다)
+  async function showFileFromTree(dir, path) {
+    if (state.folder !== dir || state.collection !== null) await openFolder(dir, false, baseName(path));
+    let i = state.photos.findIndex((p) => p.path === path);
+    if (i < 0 && state.rfilter !== 'all') { state.rfilter = 'all'; applyFilter(path); i = state.photos.findIndex((p) => p.path === path); }
+    if (i >= 0) { setFocus(i); centerMain(); }
+    renderTree();
+  }
 
   // 폴더 이름이 잘려 보이면 마우스를 올렸을 때 전체 이름을 바로 보여 준다
   const tip = $('tip');
@@ -846,7 +897,7 @@
     const cut = nm.scrollWidth > nm.clientWidth + 1;
     const info = n.count ? `사진·동영상 ${n.count}개 · ${fmtSize(n.size || 0)}` : '';
     if (!cut && !info) { tip.hidden = true; return; }
-    tip.innerHTML = `${esc(n.name)}${info ? `<small>${info} · 우클릭: 탐색기에서 열기</small>` : '<small>우클릭: 탐색기에서 열기</small>'}`;
+    tip.innerHTML = `${esc(n.name)}<small>${info ? info + ' · ' : ''}더블클릭: 파일 목록(크기순) · 우클릭: 탐색기에서 열기</small>`;
     tip.hidden = false;
     const r = nm.getBoundingClientRect(), rb = btn.getBoundingClientRect();
     tip.style.left = `${Math.max(8, r.left - 8)}px`;
@@ -861,6 +912,8 @@
     try { await post('/api/reveal', { path }); toast(`탐색기에서 열었습니다: ${label}`); } catch (e) { toast(e.message, true); }
   }
   $('tree').addEventListener('contextmenu', (ev) => {
+    const fr = ev.target.closest('[data-file]');
+    if (fr) { ev.preventDefault(); revealInExplorer(fr.dataset.file, baseName(fr.dataset.file)); return; }
     const btn = ev.target.closest('.node');
     if (!btn) return;
     ev.preventDefault();
@@ -1894,6 +1947,7 @@
       // 탐색기의 폴더별 사진 수 줄이기 (모아 보기에서는 여러 폴더)
       gone.forEach((gp) => {
         const node = state.nodes.get(gp.replace(/[\\/][^\\/]*$/, ''));
+        if (node && node.files) node.files = node.files.filter((f) => f.path !== gp);
         if (node && node.count) {
           node.count -= 1;
           const d = res.deleted.find((x) => x.path === gp);
