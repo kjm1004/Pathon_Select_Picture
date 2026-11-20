@@ -700,6 +700,7 @@
     const openPaths = [...state.nodes.values()].filter((n) => n.open).map((n) => n.path)
       .sort((a, b) => a.length - b.length);   // 위쪽 폴더부터 다시 펼친다
     const filePaths = [...state.nodes.values()].filter((n) => n.showFiles).map((n) => n.path);
+    const treeScroll = $('tree').scrollTop;   // 새로고침 뒤 같은 위치를 보여 주기 위해
     const cur = state.photos[state.focus];
     const curName = cur ? cur.name : null;
     try {
@@ -715,6 +716,8 @@
       renderTree();
       if (state.collection !== null) await openCollection(state.collection);
       else if (state.folder) await openFolder(state.folder, state.folder === state.root, curName);
+      $('tree').scrollTop = treeScroll;
+      revealSelectedNode();
       refreshSummary();
       if (!quiet) toast('새로고침했습니다');
     } catch (e) {
@@ -725,6 +728,14 @@
     }
   }
   $('refresh-btn').addEventListener('click', () => refreshAll());
+
+  // 편집 중인(선택된) 폴더가 폴더 창 밖에 있으면 보이게 스크롤
+  function revealSelectedNode() {
+    const el = $('tree').querySelector('.node.sel');
+    if (!el) return;
+    const t = $('tree').getBoundingClientRect(), r = el.getBoundingClientRect();
+    if (r.top < t.top || r.bottom > t.bottom) el.scrollIntoView({ block: 'center' });
+  }
 
   // ------------------------------------------------------------ 탐색기
   async function setRoot(path, restoreFolder, restorePhoto) {
