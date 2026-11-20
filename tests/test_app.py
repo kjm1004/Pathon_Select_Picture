@@ -310,6 +310,11 @@ def test_editor_launch(client, tmp_path, monkeypatch):
     launched = []
     monkeypatch.setattr(client.mod.subprocess, "Popen", lambda cmd, **kw: launched.append(cmd))
     monkeypatch.setattr(client.mod, "SETTINGS_FILE", tmp_path / "settings.json")
+    # 서브모듈이 없는 환경(GitHub 빌드 등)에서도 시험할 수 있게 가짜 video_editor/main.py 를 둔다
+    src = tmp_path / "src"
+    (src / "video_editor").mkdir(parents=True)
+    (src / "video_editor" / "main.py").write_text("print('editor')")
+    monkeypatch.setattr(client.mod, "SRC_DIR", src)
     tok = {"X-Token": client.mod.TOKEN}
     assert client.post("/api/editor", json={}).status_code == 403
     # 저장소의 video_editor/main.py 를 같은 파이썬으로 실행
