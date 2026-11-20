@@ -334,3 +334,92 @@ def test_editor_launch(client, tmp_path, monkeypatch):
     # 못 찾으면 404
     monkeypatch.setattr(client.mod, "find_editor", lambda: None)
     assert client.post("/api/editor", json={}, headers=tok).status_code == 404
+
+
+def _make_video(path, size="640x360", crf=2, dur=3, extra=()):
+    import subprocess as sp
+    sp.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"testsrc2=size={size}:rate=30:duration={dur}",
+            "-f", "lavfi", "-i", f"sine=duration={dur}", "-c:v", "libx264", "-crf", str(crf), "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest", *extra, str(path)], check=True)
+
+
+def _wait_jobs(client, timeout=120):
+    import time
+    for _ in range(int(timeout / 0.3)):
+        jobs = client.get("/api/compress").get_json()["jobs"]
+        if jobs and all(j["state"] not in ("queued", "running", "cancelling") for j in jobs):
+            return jobs
+        time.sleep(0.3)
+    raise AssertionError(jobs)
+
+
+needs_ffmpeg = pytest.mark.skipif(not __import__("shutil").which("ffmpeg"), reason="ffmpeg 없음")
+
+
+@needs_ffmpeg
+def test_compress_h264_smaller_keeps_original_and_date(client):
+    src = client.day / "big.mp4"
+    _make_video(src, crf=2)
+    old_mtime = src.stat().st_mtime - 86400
+    os.utime(src, (old_mtime, old_mtime))
+    tok = {"X-Token": client.mod.TOKEN}
+    pr = client.get("/api/vprobe", query_string={"path": str(src)}).get_json()
+    assert pr["width"] == 640 and pr["height"] == 360 and abs(pr["duration"] - 3) < 0.2 and pr["vcodec"] == "h264"
+    assert client.post("/api/compress", json={"paths": [str(src)]}).status_code == 403
+    client.post("/api/compress", json={"paths": [str(src)], "codec": "h264", "quality": "mid", "scale": "orig"}, headers=tok)
+    j = _wait_jobs(client)[0]
+    assert j["state"] == "done", j
+    out = Path(j["out_path"])
+    assert out.name == "big_작게.mp4" and src.exists()                     # 원본은 그대로
+    assert j["out_size"] < j["src_size"] and out.stat().st_size == j["out_size"]
+    assert abs(out.stat().st_mtime - old_mtime) < 2                         # 파일 날짜 유지
+    client.post("/api/compress/clear", headers=tok)
+    assert client.get("/api/compress").get_json()["jobs"] == []
+
+
+@needs_ffmpeg
+def test_compress_no_gain_discards_output(client):
+    src = client.day / "tiny.mp4"
+    _make_video(src, size="160x90", crf=45, dur=2)
+    tok = {"X-Token": client.mod.TOKEN}
+    client.post("/api/compress", json={"paths": [str(src)], "quality": "high"}, headers=tok)
+    j = _wait_jobs(client)[0]
+    assert j["state"] == "nogain" and not (client.day / "tiny_작게.mp4").exists()
+
+
+@needs_ffmpeg
+def test_compress_replace_hevc_scale_and_rating(client, monkeypatch):
+    trashed = []
+    monkeypatch.setattr(client.mod, "send2trash", lambda p: (trashed.append(p), Path(p).unlink()))
+    src = client.day / "phone.mp4"
+    _make_video(src, size="1080x1920", crf=4, dur=2)
+    tok = {"X-Token": client.mod.TOKEN}
+    client.post("/api/rating", json={"paths": [str(src)], "stars": 5}, headers=tok)
+    client.post("/api/compress", json={"paths": [str(src)], "codec": "hevc", "quality": "mid", "scale": "720",
+                                       "replace": True}, headers=tok)
+    j = _wait_jobs(client, 240)[0]
+    assert j["state"] == "done", j
+    assert trashed == [str(src)] and j["out_path"] == str(src) and src.exists()   # 원본 이름을 이어받음
+    v = client.mod.video_codecs(src)
+    assert v["video"] == "hvc1"
+    pr = client.mod.probe_video(src)
+    assert (pr["width"], pr["height"]) == (720, 1280)                        # 짧은 변 720
+    ph = {p["name"]: p["rating"] for p in client.get("/api/photos", query_string={"path": str(client.day)}).get_json()["photos"]}
+    assert ph["phone.mp4"] == 5                                              # 별점 유지
+
+
+@needs_ffmpeg
+def test_compress_cancel(client):
+    src = client.day / "long.mp4"
+    _make_video(src, size="1920x1080", crf=2, dur=20)
+    tok = {"X-Token": client.mod.TOKEN}
+    client.post("/api/compress", json={"paths": [str(src)], "codec": "hevc"}, headers=tok)
+    import time
+    for _ in range(50):
+        if client.get("/api/compress").get_json()["jobs"][0]["state"] == "running":
+            break
+        time.sleep(0.1)
+    client.post("/api/compress/cancel", json={"path": str(src)}, headers=tok)
+    j = _wait_jobs(client)[0]
+    assert j["state"] == "cancelled"
+    assert not list(client.day.glob("long_작게*"))                            # 만들다 만 파일 정리

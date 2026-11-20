@@ -48,7 +48,7 @@ DATA_DIR = Path(os.environ.get("PHOTO_CLEANER_HOME", Path.home() / ".photo-clean
 CACHE_DIR = Path(os.environ.get("PHOTO_CLEANER_CACHE", DATA_DIR / "cache"))
 SETTINGS_FILE = DATA_DIR / "settings.json"
 RATINGS_DB = DATA_DIR / "ratings.db"
-DEFAULT_SETTINGS = {"root": None, "folder": None, "photo": None, "view": "single", "nup": 2, "gridSize": "m", "sidebar": True, "smooth": 2, "defaultStars": 3, "indexBar": True, "indexSize": "m", "infoPanel": False, "editorPath": None}
+DEFAULT_SETTINGS = {"root": None, "folder": None, "photo": None, "view": "single", "nup": 2, "gridSize": "m", "sidebar": True, "smooth": 2, "defaultStars": 3, "indexBar": True, "indexSize": "m", "infoPanel": False, "editorPath": None, "compress": None}
 
 # 미리보기를 만들 수 있는 형식
 VIEWABLE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
@@ -461,6 +461,263 @@ class PreviewJobs:
             except OSError:
                 pass
 
+
+# ---------------------------------------------------------------- 동영상 용량 줄이기
+def probe_video(path: Path) -> dict:
+    """ffmpeg로 동영상 정보(길이·해상도·코덱·픽셀 형식·데이터 속도)를 읽는다."""
+    exe = ffmpeg_exe()
+    info = {"size": path.stat().st_size, "duration": None, "width": None, "height": None,
+            "vcodec": None, "pix_fmt": None, "bitrate": None, "audio": None, "tenbit": False, "rotate": 0}
+    if not exe:
+        return info
+    try:
+        r = subprocess.run([exe, "-hide_banner", "-i", str(path)], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=30, creationflags=_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return info
+    err = r.stderr
+    m = re.search(r"Duration: (\d+):(\d+):(\d+\.?\d*)", err)
+    if m:
+        info["duration"] = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    m = re.search(r"bitrate: (\d+) kb/s", err)
+    if m:
+        info["bitrate"] = int(m.group(1))
+    m = re.search(r"Stream #\S+: Video: (\w+)[^,]*, (\w+)[^,]*?(?:\([^)]*\))?[^,]*, (\d{2,5})x(\d{2,5})", err)
+    if m:
+        info["vcodec"], info["pix_fmt"] = m.group(1), m.group(2)
+        info["width"], info["height"] = int(m.group(3)), int(m.group(4))
+        info["tenbit"] = "10" in (m.group(2) or "")
+    m = re.search(r"Stream #\S+: Audio: (\w+)", err)
+    if m:
+        info["audio"] = m.group(1)
+    m = re.search(r"rotation of (-?\d+(?:\.\d+)?) degrees|rotate\s*:\s*(-?\d+)", err)
+    if m:
+        info["rotate"] = int(float(m.group(1) or m.group(2))) % 360
+    if info["rotate"] in (90, 270) and info["width"]:
+        info["width"], info["height"] = info["height"], info["width"]     # 화면에 보이는 크기
+    return info
+
+
+_gpu_cache: dict = {}
+
+
+def gpu_encoders() -> dict:
+    """이 PC에서 실제로 동작하는 그래픽카드 인코더 (처음 한 번만 시험)."""
+    if "r" in _gpu_cache:
+        return _gpu_cache["r"]
+    exe, found = ffmpeg_exe(), {}
+    for vendor, h264, hevc in (("NVIDIA", "h264_nvenc", "hevc_nvenc"), ("Intel", "h264_qsv", "hevc_qsv"),
+                               ("AMD", "h264_amf", "hevc_amf")):
+        if not exe:
+            break
+        try:
+            r = subprocess.run([exe, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                                "color=black:s=256x256:d=0.2", "-frames:v", "2", "-c:v", h264, "-f", "null", "-"],
+                               capture_output=True, timeout=20, creationflags=_NO_WINDOW)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode == 0:
+            found = {"vendor": vendor, "h264": h264, "hevc": hevc}
+            break
+    _gpu_cache["r"] = found
+    return found
+
+
+QUALITY = {   # (H.264 CPU crf, H.265 CPU crf, GPU H.264 cq, GPU H.265 cq)
+    "high": (20, 22, 21, 23),
+    "mid": (23, 25, 24, 26),
+    "small": (26, 28, 27, 29),
+}
+
+
+def compress_cmd(src: Path, out: Path, opt: dict, info: dict) -> list[str]:
+    codec = "hevc" if opt.get("codec") == "hevc" else "h264"
+    q = QUALITY.get(opt.get("quality"), QUALITY["mid"])
+    gpu = gpu_encoders() if opt.get("gpu") else {}
+    vf = []
+    limit = {"1080": 1080, "720": 720}.get(str(opt.get("scale") or ""))
+    if limit:   # 짧은 변이 limit보다 크면 줄임 (가로/세로 모두)
+        vf.append(f"scale=w='if(gt(iw,ih),-2,min({limit},iw))':h='if(gt(iw,ih),min({limit},ih),-2)'")
+    tenbit = info.get("tenbit") and codec == "hevc"
+    cmd = [ffmpeg_exe(), "-hide_banner", "-nostats", "-y", "-i", str(src),
+           "-map", "0:v:0", "-map", "0:a?", "-map_metadata", "0", "-dn", "-sn"]
+    if vf:
+        cmd += ["-vf", ",".join(vf)]
+    if gpu:
+        enc = gpu[codec]
+        cq = q[3] if codec == "hevc" else q[2]
+        if enc.endswith("nvenc"):
+            cmd += ["-c:v", enc, "-preset", "p5", "-rc", "vbr", "-cq", str(cq), "-b:v", "0"]
+        elif enc.endswith("qsv"):
+            cmd += ["-c:v", enc, "-preset", "slower", "-global_quality", str(cq)]
+        else:
+            cmd += ["-c:v", enc, "-quality", "quality", "-rc", "cqp", "-qp_i", str(cq), "-qp_p", str(cq)]
+        cmd += ["-pix_fmt", "p010le" if tenbit else "nv12"]
+    elif codec == "hevc":
+        cmd += ["-c:v", "libx265", "-preset", "medium", "-crf", str(q[1]), "-x265-params", "log-level=error",
+                "-pix_fmt", "yuv420p10le" if tenbit else "yuv420p"]
+    else:
+        cmd += ["-c:v", "libx264", "-preset", "slow", "-crf", str(q[0]), "-pix_fmt", "yuv420p"]
+    if codec == "hevc":
+        cmd += ["-tag:v", "hvc1"]
+    cmd += ["-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart+use_metadata_tags",
+            "-progress", "pipe:1", str(out)]
+    return cmd
+
+
+def unique_path(p: Path) -> Path:
+    if not p.exists():
+        return p
+    for i in range(2, 1000):
+        q = p.with_name(f"{p.stem} ({i}){p.suffix}")
+        if not q.exists():
+            return q
+    raise RuntimeError("저장할 이름을 정할 수 없습니다")
+
+
+class CompressJobs:
+    """동영상 용량 줄이기 작업 목록. 한 번에 하나씩 처리한다."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.jobs: list[dict] = []
+        self.running = False
+        self.proc: subprocess.Popen | None = None
+
+    def add(self, paths: list[Path], opt: dict) -> int:
+        n = 0
+        with self.lock:
+            busy = {j["path"] for j in self.jobs if j["state"] in ("queued", "running", "cancelling")}
+            for p in paths:
+                if str(p) in busy:
+                    continue
+                self.jobs.append({"path": str(p), "name": p.name, "state": "queued", "progress": 0,
+                                  "src_size": p.stat().st_size, "opt": dict(opt)})
+                n += 1
+            if n and not self.running:
+                self.running = True
+                threading.Thread(target=self._worker, daemon=True).start()
+        return n
+
+    def list(self) -> list[dict]:
+        with self.lock:
+            return [{k: v for k, v in j.items() if k not in ("opt", "cancel", "_running")} for j in self.jobs]
+
+    def cancel(self, path: str | None):
+        """대기 중이면 바로 취소, 변환 중이면 '취소 중' → 정리(임시 파일 삭제)가 끝나면 '취소됨'."""
+        kill = False
+        with self.lock:
+            for j in self.jobs:
+                if path is not None and j["path"] != path:
+                    continue
+                if j["state"] == "queued":
+                    j["state"] = "cancelled"
+                elif j["state"] == "running":
+                    j["state"], j["cancel"] = "cancelling", True
+                    kill = True
+            proc = self.proc
+        if kill and proc and proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+    def clear_finished(self):
+        with self.lock:
+            self.jobs = [j for j in self.jobs if j["state"] in ("queued", "running", "cancelling")]
+
+    def _worker(self):
+        while True:
+            with self.lock:
+                job = next((j for j in self.jobs if j["state"] == "queued"), None)
+                if not job:
+                    self.running = False
+                    return
+                job["state"], job["_running"] = "running", True
+            try:
+                self._run(job)
+            except Exception as ex:  # noqa: BLE001
+                with self.lock:
+                    job["state"], job["error"] = ("cancelled", None) if job.get("cancel") else ("error", str(ex)[:300])
+            finally:
+                job.pop("_running", None)
+
+    def _run(self, job: dict):
+        src = Path(job["path"])
+        st = src.stat()
+        info = probe_video(src)
+        out = unique_path(src.with_name(f"{src.stem}_작게.mp4"))
+        tmp = out.with_name(out.stem + ".part.mp4")
+        cmd = compress_cmd(src, tmp, job["opt"], info)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                encoding="utf-8", errors="replace", creationflags=_NO_WINDOW)
+        self.proc = proc
+        if job.get("cancel"):          # 시작하는 사이에 취소됨
+            proc.kill()
+        err_tail: list[str] = []
+        t = threading.Thread(target=lambda: [err_tail.append(x.strip()) or err_tail.__delitem__(slice(0, -5))
+                                             for x in proc.stderr], daemon=True)
+        t.start()
+        total = info.get("duration") or 0
+        for line in proc.stdout:
+            if line.startswith(("out_time_us=", "out_time_ms=")) and total:
+                try:
+                    sec = int(line.split("=", 1)[1]) / 1e6
+                except ValueError:
+                    continue
+                with self.lock:
+                    job["progress"] = max(0, min(99, int(sec / total * 100)))
+        proc.wait()
+        t.join(timeout=2)
+        self.proc = None
+        if job.get("cancel"):
+            tmp.unlink(missing_ok=True)
+            with self.lock:
+                job["state"] = "cancelled"
+            return
+        if proc.returncode != 0 or not tmp.exists():
+            tmp.unlink(missing_ok=True)
+            # 그래픽카드 인코딩이 실패하면 CPU로 한 번 더
+            if job["opt"].get("gpu"):
+                job["opt"]["gpu"] = False
+                job["note"] = "그래픽카드 변환이 실패해 CPU로 다시 변환했습니다"
+                return self._run(job)
+            raise RuntimeError("변환 실패: " + (" / ".join(err_tail[-2:]) or f"code {proc.returncode}"))
+        new_size = tmp.stat().st_size
+        if new_size >= job["src_size"] * 0.97:          # 거의 안 줄면 새 파일은 버린다
+            tmp.unlink(missing_ok=True)
+            with self.lock:
+                job.update(state="nogain", progress=100, out_size=new_size)
+            return
+        os.replace(tmp, out)
+        os.utime(out, (st.st_atime, st.st_mtime))       # 파일 날짜는 원본과 같게 (날짜순 정렬 유지)
+        final = out
+        if job["opt"].get("replace"):                   # 원본은 휴지통으로, 새 파일이 원본 이름을 이어받음
+            send2trash(str(src))
+            target = src if src.suffix.lower() == ".mp4" else unique_path(src.with_suffix(".mp4"))
+            os.replace(out, target)
+            final = target
+            with ratings_db() as con:                   # 별점도 따라간다
+                con.execute("UPDATE OR REPLACE ratings SET key=?, path=?, dir=? WHERE key=?",
+                            (rkey(final), str(final), rkey(final.parent), rkey(src)))
+        with self.lock:
+            job.update(state="done", progress=100, out_size=new_size, out_path=str(final),
+                       replaced=bool(job["opt"].get("replace")))
+
+    def stop_all(self):
+        with self.lock:
+            for j in self.jobs:
+                if j["state"] in ("queued", "running"):
+                    j["state"], j["cancel"] = "cancelled", True
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.kill()
+            except OSError:
+                pass
+
+
+COMPRESS = CompressJobs()
+atexit.register(lambda: COMPRESS.stop_all())
 
 PREVIEWS = PreviewJobs()
 atexit.register(PREVIEWS.stop_all)
@@ -889,6 +1146,56 @@ def api_video():
     resp = send_file(path, mimetype=VIDEO_MIME.get(path.suffix.lower(), "application/octet-stream"), conditional=True)
     resp.headers["Cache-Control"] = "private, max-age=3600"
     return resp
+
+
+@app.get("/api/vprobe")
+def api_vprobe():
+    path = safe_path(request.args.get("path"))
+    if not path.is_file() or not is_video(path.name):
+        abort(415, "동영상 파일이 아닙니다")
+    return jsonify(probe_video(path))
+
+
+@app.get("/api/compress/caps")
+def api_compress_caps():
+    g = gpu_encoders()
+    return jsonify(ffmpeg=bool(ffmpeg_exe()), gpu=bool(g), gpuName=g.get("vendor"))
+
+
+@app.post("/api/compress")
+def api_compress_start():
+    data = request.get_json(silent=True) or {}
+    paths = data.get("paths") or []
+    if not isinstance(paths, list) or not paths:
+        abort(400, "동영상을 골라 주세요")
+    if not ffmpeg_exe():
+        abort(400, "변환 도구(ffmpeg)를 찾을 수 없습니다")
+    files = []
+    for raw in paths:
+        p = Path(str(raw))
+        if not p.is_absolute() or not p.is_file() or not is_video(p.name):
+            abort(400, f"동영상 파일이 아닙니다: {raw}")
+        files.append(p)
+    opt = {k: data.get(k) for k in ("codec", "quality", "scale", "gpu", "replace")}
+    return jsonify(added=COMPRESS.add(files, opt), jobs=COMPRESS.list())
+
+
+@app.get("/api/compress")
+def api_compress_list():
+    return jsonify(jobs=COMPRESS.list())
+
+
+@app.post("/api/compress/cancel")
+def api_compress_cancel():
+    data = request.get_json(silent=True) or {}
+    COMPRESS.cancel(data.get("path"))
+    return jsonify(jobs=COMPRESS.list())
+
+
+@app.post("/api/compress/clear")
+def api_compress_clear():
+    COMPRESS.clear_finished()
+    return jsonify(jobs=COMPRESS.list())
 
 
 @app.post("/api/preview")

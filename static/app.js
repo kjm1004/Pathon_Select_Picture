@@ -573,6 +573,7 @@
     $('ip-empty').hidden = !!p;
     $('ip-body').hidden = !p;
     if (!p) return;
+    $('ip-actions').hidden = !p.video;
     const folder = p.path.slice(0, p.path.length - p.name.length).replace(/[\\/]$/, '');
     let vm = null;
     const fileRows = (info) => [
@@ -692,7 +693,7 @@
   // ------------------------------------------------------------ 새로고침 (F5)
   // 폴더 목록·개수·크기, 지금 폴더의 사진 목록, 별점 모아 보기를 다시 읽는다. 펼친 폴더와 보던 사진은 유지.
   let refreshing = false;
-  async function refreshAll() {
+  async function refreshAll(quiet = false) {
     if (refreshing || !state.root) return;
     refreshing = true;
     $('refresh-btn').classList.add('spin');
@@ -713,7 +714,7 @@
       if (state.collection !== null) await openCollection(state.collection);
       else if (state.folder) await openFolder(state.folder, state.folder === state.root, curName);
       refreshSummary();
-      toast('새로고침했습니다');
+      if (!quiet) toast('새로고침했습니다');
     } catch (e) {
       toast('새로고침하지 못했습니다: ' + e.message, true);
     } finally {
@@ -721,7 +722,7 @@
       $('refresh-btn').classList.remove('spin');
     }
   }
-  $('refresh-btn').addEventListener('click', refreshAll);
+  $('refresh-btn').addEventListener('click', () => refreshAll());
 
   // ------------------------------------------------------------ 탐색기
   async function setRoot(path, restoreFolder, restorePhoto) {
@@ -867,6 +868,29 @@
     revealInExplorer(btn.dataset.path, state.nodes.get(btn.dataset.path).name);
   });
   // 사진(인덱스·바둑판·나란히)을 우클릭하면 그 파일이 선택된 탐색기
+  // 사진·동영상을 우클릭하면 메뉴 (탐색기, 기본 프로그램, 동영상 용량 줄이기)
+  const ctx = $('ctx');
+  function showCtx(x, y, p) {
+    const items = [];
+    if (p.video) items.push(['compress', '동영상 용량 줄이기…'], ['editor', '영상편집에서 열기'], ['hr']);
+    items.push(['reveal', '탐색기에서 보기'], ['open', p.video ? '기본 동영상 프로그램으로 열기' : '기본 프로그램으로 열기']);
+    ctx.innerHTML = items.map(([k, t]) => (k === 'hr' ? '<hr>' : `<button role="menuitem" data-k="${k}">${esc(t)}</button>`)).join('');
+    ctx.hidden = false;
+    ctx.style.left = `${Math.min(x, innerWidth - ctx.offsetWidth - 8)}px`;
+    ctx.style.top = `${Math.min(y, innerHeight - ctx.offsetHeight - 8)}px`;
+    ctx.onclick = (ev) => {
+      const b = ev.target.closest('[data-k]');
+      if (!b) return;
+      ctx.hidden = true;
+      if (b.dataset.k === 'compress') openCompress(p);
+      if (b.dataset.k === 'editor') { setFocus(state.photos.indexOf(p), false); openEditor(); }
+      if (b.dataset.k === 'reveal') revealInExplorer(p.path, p.name);
+      if (b.dataset.k === 'open') post('/api/open', { path: p.path }).catch((e) => toast(e.message, true));
+    };
+    ctx.querySelector('button').focus();
+  }
+  document.addEventListener('mousedown', (ev) => { if (!ctx.hidden && !ctx.contains(ev.target)) ctx.hidden = true; });
+  document.addEventListener('keydown', (ev) => { if (!ctx.hidden && ev.key === 'Escape') { ctx.hidden = true; ev.stopPropagation(); } }, true);
   for (const id of ['strip', 'grid', 'multi']) {
     $(id).addEventListener('contextmenu', (ev) => {
       const el = ev.target.closest('[data-i]');
@@ -874,9 +898,129 @@
       const p = state.photos[+el.dataset.i];
       if (!p) return;
       ev.preventDefault();
-      revealInExplorer(p.path, p.name);
+      showCtx(ev.clientX, ev.clientY, p);
     });
   }
+  // 한 장 보기·전체 화면의 큰 사진/동영상도 우클릭 메뉴
+  for (const id of ['big', 'fs-stage']) {
+    $(id).addEventListener('contextmenu', (ev) => {
+      const p = state.photos[state.focus];
+      if (!p) return;
+      ev.preventDefault();
+      showCtx(ev.clientX, ev.clientY, p);
+    });
+  }
+
+  // ------------------------------------------------------------ 동영상 용량 줄이기
+  const cpOpt = { codec: 'h264', quality: 'mid', scale: 'orig', scope: 'one', gpu: true, replace: false };
+  let cpTarget = null, cpCaps = null;
+  function cpPaint() {
+    document.querySelectorAll('#compress .seg').forEach((g) => {
+      g.querySelectorAll('button').forEach((b) => b.setAttribute('aria-checked', String(cpOpt[g.dataset.key] === b.dataset.v)));
+    });
+    $('cp-hevc-note').hidden = cpOpt.codec !== 'hevc';
+  }
+  document.querySelectorAll('#compress .seg').forEach((g) => {
+    g.setAttribute('role', 'radiogroup');
+    g.querySelectorAll('button').forEach((b) => { b.setAttribute('role', 'radio'); b.addEventListener('click', () => { cpOpt[g.dataset.key] = b.dataset.v; cpPaint(); }); });
+  });
+  const fmtDurLong = (s) => (s ? fmtDur(s) : '?');
+  async function openCompress(p) {
+    cpTarget = p;
+    if (state.settings.compress) Object.assign(cpOpt, state.settings.compress, { scope: 'one' });
+    const vids = state.allPhotos.filter((x) => x.video);
+    $('cp-folder').textContent = `이 폴더의 동영상 모두 (${vids.length}개 · ${fmtSize(vids.reduce((a, x) => a + x.size, 0))})`;
+    $('cp-folder').disabled = vids.length < 2;
+    $('cp-info').innerHTML = '<span class="muted">동영상 정보를 읽는 중…</span>';
+    $('cp-replace').checked = !!cpOpt.replace;
+    cpPaint();
+    $('compress').hidden = false;
+    $('cp-start').focus();
+    try {
+      if (!cpCaps) cpCaps = await api('/api/compress/caps');
+      $('cp-gpu').disabled = !cpCaps.gpu;
+      $('cp-gpu').checked = cpCaps.gpu && cpOpt.gpu !== false;
+      $('cp-gpu-label').textContent = cpCaps.gpu ? `그래픽카드(${cpCaps.gpuName})로 빠르게 변환 — 같은 화질이면 파일은 조금 더 큼` : '그래픽카드 변환을 쓸 수 없어 CPU로 변환합니다';
+      $('cp-start').disabled = !cpCaps.ffmpeg;
+      const v = await api('/api/vprobe?path=' + encodeURIComponent(p.path));
+      if (cpTarget !== p) return;
+      const rows = [['파일', p.name], ['크기', fmtSize(v.size)], ['길이', fmtDurLong(v.duration)],
+        ['해상도', v.width ? `${v.width} × ${v.height}` : '?'],
+        ['데이터 속도', v.bitrate ? `${(v.bitrate / 1000).toFixed(1)} Mbps${v.bitrate > 9000 ? ' — 많이 줄어들 수 있습니다' : v.bitrate < 4000 ? ' — 이미 압축이 잘 되어 있어 적게 줄어듭니다' : ''}` : '?'],
+        ['코덱', [v.vcodec, v.audio].filter(Boolean).join(' / ') + (v.tenbit ? ' (10비트/HDR일 수 있음)' : '')]];
+      $('cp-info').innerHTML = rows.map(([k, x]) => `<dt>${esc(k)}</dt><dd>${esc(x)}</dd>`).join('');
+    } catch (e) {
+      $('cp-info').innerHTML = `<span class="muted">${esc(e.message)}</span>`;
+    }
+  }
+  function closeCompress() { $('compress').hidden = true; }
+  $('cp-cancel').addEventListener('click', closeCompress);
+  $('ip-compress').addEventListener('click', () => { const p = state.photos[state.focus]; if (p && p.video) openCompress(p); });
+  $('cp-start').addEventListener('click', async () => {
+    cpOpt.gpu = $('cp-gpu').checked;
+    cpOpt.replace = $('cp-replace').checked;
+    const paths = cpOpt.scope === 'folder' ? state.allPhotos.filter((x) => x.video).map((x) => x.path) : [cpTarget.path];
+    if (cpOpt.replace && !window.confirm(`변환이 끝나면 원본 ${paths.length}개를 휴지통으로 옮기고 새 파일로 바꿉니다.\n계속할까요?`)) return;
+    const { scope, ...save } = cpOpt;
+    state.settings.compress = save;
+    saveSettings({ compress: save });
+    try {
+      const r = await post('/api/compress', { paths, ...save });
+      closeCompress();
+      toast(r.added ? `동영상 ${r.added}개 용량 줄이기를 시작합니다` : '이미 진행 중인 동영상입니다');
+      showJobs(r.jobs);
+    } catch (e) { toast(e.message, true); }
+  });
+
+  // 작업 목록 (오른쪽 아래)
+  let jobsTimer = null, jobsSeen = {};
+  const JOB_STATE = { queued: '대기 중', running: '변환 중', cancelling: '취소하는 중…', cancelled: '취소됨', error: '실패', nogain: '줄어들지 않음' };
+  function showJobs(jobs) {
+    renderJobs(jobs);
+    clearTimeout(jobsTimer);
+    if (jobs.some((j) => ['queued', 'running', 'cancelling'].includes(j.state))) jobsTimer = setTimeout(pollJobs, 1000);
+  }
+  async function pollJobs() {
+    try { showJobs((await api('/api/compress')).jobs); } catch (_) { jobsTimer = setTimeout(pollJobs, 2000); }
+  }
+  function renderJobs(jobs) {
+    $('jobs').hidden = !jobs.length;
+    const active = jobs.filter((j) => ['queued', 'running', 'cancelling'].includes(j.state)).length;
+    const done = jobs.filter((j) => j.state === 'done');
+    const saved = done.reduce((a, j) => a + (j.src_size - j.out_size), 0);
+    $('jobs-sum').textContent = active ? `${jobs.length - active}/${jobs.length} 완료` : (done.length ? `${fmtSize(saved)} 줄임` : '');
+    $('jobs-cancel').hidden = !active;
+    $('jobs-list').innerHTML = jobs.map((j) => {
+      let st = JOB_STATE[j.state] || j.state, cls = '';
+      if (j.state === 'running') st = `변환 중 ${j.progress}%`;
+      if (j.state === 'done') { st = `${fmtSize(j.src_size)} → ${fmtSize(j.out_size)} (${Math.round((1 - j.out_size / j.src_size) * 100)}% 감소)${j.replaced ? ' · 원본 교체' : ''}`; cls = 'ok'; }
+      if (j.state === 'nogain') st = `원본보다 작아지지 않아 새 파일을 만들지 않았습니다 (${fmtSize(j.src_size)} → ${fmtSize(j.out_size)})`;
+      if (j.state === 'error') { st = `실패: ${j.error || ''}`; cls = 'err'; }
+      if (j.note) st += ` · ${j.note}`;
+      const act = ['queued', 'running'].includes(j.state) ? `<button class="btn btn-xs" data-cancel="${esc(j.path)}">취소</button>`
+        : j.state === 'done' ? `<button class="btn btn-xs" data-reveal="${esc(j.out_path)}">보기</button>` : '';
+      const bar = ['queued', 'running', 'cancelling'].includes(j.state) ? `<div class="jb"><i style="width:${j.progress}%"></i></div>` : '';
+      return `<div class="job"><span class="jn" title="${esc(j.path)}">${esc(j.name)}</span><span class="ja">${act}</span><span class="js ${cls}">${esc(st)}</span>${bar}</div>`;
+    }).join('');
+    // 새로 끝난 작업이 지금 폴더에 있으면 목록을 새로 읽는다 (새 파일이 보이게)
+    let refresh = false;
+    for (const j of jobs) {
+      if (jobsSeen[j.path] !== j.state && j.state === 'done' && state.allPhotos.some((p) => p.path === j.path || p.path === j.out_path)) refresh = true;
+      jobsSeen[j.path] = j.state;
+    }
+    if (refresh) refreshAll(true);
+  }
+  $('jobs-list').addEventListener('click', (ev) => {
+    const c = ev.target.closest('[data-cancel]');
+    if (c) post('/api/compress/cancel', { path: c.dataset.cancel }).then((r) => showJobs(r.jobs));
+    const r = ev.target.closest('[data-reveal]');
+    if (r) revealInExplorer(r.dataset.reveal, baseName(r.dataset.reveal));
+  });
+  $('jobs-cancel').addEventListener('click', () => post('/api/compress/cancel', {}).then((r) => showJobs(r.jobs)));
+  $('jobs-close').addEventListener('click', async () => {
+    const r = await post('/api/compress/clear', {});
+    if (r.jobs.length) { toast('진행 중인 작업은 끝나면 사라집니다'); showJobs(r.jobs); } else $('jobs').hidden = true;
+  });
 
   $('folder-search').addEventListener('input', (e) => { state.q = e.target.value.trim().toLowerCase(); renderTree(); });
   $('root-select').addEventListener('change', (e) => { e.target.blur(); setRoot(e.target.value); });
@@ -1423,7 +1567,7 @@
     }
   }
   document.addEventListener('mousemove', (e) => {
-    if (state.fs || !$('dialog').hidden || !$('settings').hidden) return;   // 사진 전체 화면에서는 꺼내지 않음
+    if (state.fs || !$('dialog').hidden || !$('settings').hidden || !$('compress').hidden) return;   // 사진 전체 화면에서는 꺼내지 않음
     const x = e.clientX, y = e.clientY, w = window.innerWidth;
     // 창 최대화 상태에서는 상단 바 아래쪽 가장자리만 (맨 위 버튼을 가리지 않게)
     const top = state.fs ? 0 : edgeTop();
@@ -1783,6 +1927,10 @@
       if (ev.key === 'Escape') closeSettings();
       return;
     }
+    if (!$('compress').hidden) {
+      if (ev.key === 'Escape') closeCompress();
+      return;
+    }
     const t = ev.target;
     // 선택 상자에 포커스가 남아 있어도 ← → 는 사진 이동 (상자 값이 바뀌지 않게)
     if (t.matches('select') && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) t.blur();
@@ -1819,5 +1967,5 @@
   // 별도 프로그램 창이면 "폴더 열기"가 윈도우 폴더 선택 창을 띄운다
   window.addEventListener('pywebviewready', () => { $('open-folder').title = '폴더 선택 창 열기'; });
 
-  init().catch((e) => toast(e.message, true));
+  init().then(() => api('/api/compress')).then((r) => { if (r && r.jobs.length) showJobs(r.jobs); }).catch((e) => toast(e.message, true));
 })();

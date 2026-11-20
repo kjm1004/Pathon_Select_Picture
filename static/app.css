@@ -347,6 +347,38 @@ img.vimg.broken { display: none; }
   background: #E6E8EB; color: #121417; font-size: 13px; line-height: 1.4; box-shadow: 0 4px 16px rgba(0,0,0,.5); pointer-events: none; word-break: break-all; }
 .tip small { display: block; color: #4A505A; font-size: 11px; margin-top: 2px; }
 
+/* ---------- 우클릭 메뉴 ---------- */
+.ctx { position: fixed; z-index: 60; min-width: 220px; padding: 4px; border-radius: 8px; background: #23272D; border: 1px solid var(--line2); box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+.ctx button { display: flex; width: 100%; align-items: center; gap: 8px; padding: 8px 12px; border: 0; border-radius: 5px; background: transparent; color: var(--text); font-size: 13px; text-align: left; }
+.ctx button:hover, .ctx button:focus-visible { background: #2F3A4A; outline: none; }
+.ctx hr { border: 0; border-top: 1px solid var(--line2); margin: 4px 2px; }
+
+/* ---------- 동영상 용량 줄이기 ---------- */
+.cdialog { max-width: 560px; }
+.cp-info { display: grid; grid-template-columns: 90px minmax(0,1fr); gap: 4px 10px; font-size: 13px; padding: 10px 12px; border-radius: 8px; background: var(--bar); border: 1px solid var(--line); }
+.cp-info dt { color: var(--muted); } .cp-info dd { margin: 0; word-break: break-all; }
+.cp-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cp-label { width: 52px; color: var(--muted); font-size: 13px; flex: none; }
+.cdialog .seg button[aria-checked="true"] { background: #2F3A4A; color: #fff; }
+.cdialog .seg button { height: 32px; }
+.cp-note { margin: -4px 0 0; font-size: 12px; line-height: 1.6; }
+.cp-check { font-size: 13px; }
+.btn-primary { height: 40px; padding: 0 18px; border-radius: 8px; border: 0; background: var(--blue); color: #fff; font-size: 14px; font-weight: 700; }
+.btn-primary:disabled { background: var(--line); color: #8A9098; }
+.btn-xs { height: 26px; padding: 0 10px; font-size: 12px; }
+.jobs { position: fixed; right: 16px; bottom: 56px; z-index: 40; width: 400px; max-width: calc(100vw - 32px); max-height: 50vh; display: flex; flex-direction: column;
+  background: #1E2125; border: 1px solid var(--line2); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.5); }
+.jobs-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.jobs-list { overflow-y: auto; padding: 4px 0; }
+.job { padding: 8px 12px; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 4px 8px; font-size: 12px; border-bottom: 1px solid #23272D; }
+.job:last-child { border-bottom: 0; }
+.job .jn { font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.job .js { color: var(--muted); grid-column: 1; }
+.job .js.ok { color: #7FD99A; } .job .js.err { color: #FF9A80; }
+.job .jb { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: #2A2E34; overflow: hidden; }
+.job .jb i { display: block; height: 100%; background: var(--blue); transition: width .5s; }
+.job .ja { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 4px; align-items: center; }
+
 @media (max-width: 700px) {
   .body { flex-wrap: wrap; overflow: auto; }
   .sidebar { flex: 1 1 100%; width: auto; }

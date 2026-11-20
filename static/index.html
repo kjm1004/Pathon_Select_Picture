@@ -179,6 +179,9 @@
         <section class="ip-sec">
           <h3>파일</h3>
           <dl id="ip-file" class="ip-dl"></dl>
+          <div id="ip-actions" class="ip-links" hidden>
+            <button id="ip-compress" class="btn">동영상 용량 줄이기…</button>
+          </div>
         </section>
         <section class="ip-sec">
           <h3>히스토그램</h3>
@@ -270,6 +273,55 @@
       <button id="fs-toggle" class="toggle-btn">삭제 표시</button>
       <button id="fs-close" class="btn">닫기 (Esc)</button>
     </div>
+  </div>
+
+  <!-- 사진·동영상 우클릭 메뉴 -->
+  <div id="ctx" class="ctx" role="menu" hidden></div>
+
+  <!-- 동영상 용량 줄이기 -->
+  <div id="compress" class="overlay" hidden>
+    <div class="dialog cdialog" role="dialog" aria-modal="true" aria-labelledby="cp-title">
+      <h2 id="cp-title">동영상 용량 줄이기</h2>
+      <div id="cp-info" class="cp-info"></div>
+      <div class="cp-row"><span class="cp-label">형식</span>
+        <div class="seg" role="radiogroup" data-key="codec">
+          <button data-v="h264">H.264 · 어디서나 재생 (권장)</button>
+          <button data-v="hevc">H.265 · 더 작게</button>
+        </div></div>
+      <p id="cp-hevc-note" class="muted cp-note" hidden>H.265는 크기가 더 작지만, HEVC 확장이 없는 Windows PC에서는 소리만 나올 수 있습니다 (휴대폰·TV는 대부분 재생).</p>
+      <div class="cp-row"><span class="cp-label">화질</span>
+        <div class="seg" role="radiogroup" data-key="quality">
+          <button data-v="high">높음</button><button data-v="mid">보통 (권장)</button><button data-v="small">작게</button>
+        </div></div>
+      <div class="cp-row"><span class="cp-label">해상도</span>
+        <div class="seg" role="radiogroup" data-key="scale">
+          <button data-v="orig">원본 그대로</button><button data-v="1080">1080p 이하</button><button data-v="720">720p 이하</button>
+        </div></div>
+      <label class="check cp-check"><input id="cp-gpu" type="checkbox"> <span id="cp-gpu-label">그래픽카드로 빠르게 변환</span></label>
+      <div class="cp-row"><span class="cp-label">대상</span>
+        <div class="seg" role="radiogroup" data-key="scope">
+          <button data-v="one" id="cp-one">이 동영상</button><button data-v="folder" id="cp-folder">이 폴더의 동영상 모두</button>
+        </div></div>
+      <label class="check cp-check"><input id="cp-replace" type="checkbox"> 끝나면 원본은 휴지통으로 옮기고 새 파일로 바꾸기</label>
+      <p class="muted cp-note">기본은 원본을 그대로 두고 <b>이름_작게.mp4</b>를 새로 만듭니다. 촬영 정보와 파일 날짜는 유지됩니다.
+        결과가 원본보다 작아지지 않으면 새 파일은 만들지 않습니다.</p>
+      <div class="dlg-actions">
+        <button id="cp-cancel" class="btn">취소</button>
+        <button id="cp-start" class="btn-primary">용량 줄이기 시작</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 용량 줄이기 작업 목록 -->
+  <div id="jobs" class="jobs" hidden>
+    <div class="jobs-head">
+      <strong>동영상 용량 줄이기</strong>
+      <span id="jobs-sum" class="muted"></span>
+      <span class="spacer"></span>
+      <button id="jobs-cancel" class="btn btn-xs">모두 취소</button>
+      <button id="jobs-close" class="icon-btn icon-xs" aria-label="닫기"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div id="jobs-list" class="jobs-list scrolly"></div>
   </div>
 
   <div id="tip" class="tip" role="tooltip" hidden></div>
