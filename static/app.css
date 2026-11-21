@@ -389,6 +389,9 @@ button.frow:hover { background: #1F242A; }
 .frow .fsz { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .frow.more { color: var(--blue-t); }
 
+/* 키보드로 작업하는 동안 마우스 포인터 숨기기 */
+.hide-cursor, .hide-cursor * { cursor: none !important; }
+
 @media (max-width: 700px) {
   .body { flex-wrap: wrap; overflow: auto; }
   .sidebar { flex: 1 1 100%; width: auto; }

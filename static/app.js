@@ -1982,6 +1982,25 @@
     }
   });
 
+  // ------------------------------------------------------------ 키보드로 작업할 때 마우스 포인터 숨기기
+  // 키를 누르면 숨기고, 마우스를 실제로 움직이면(몇 px 이상) 다시 보인다.
+  // (사진이 바뀌며 화면이 다시 그려질 때 생기는 가짜 이동으로는 나타나지 않게 거리로 판단)
+  let mouseAt = null;
+  const typing = (t) => t && t.matches && t.matches('input[type=text], input:not([type]), textarea, select');
+  document.addEventListener('keydown', (ev) => {
+    if (typing(ev.target) || ['Shift', 'Control', 'Alt', 'Meta', 'Tab'].includes(ev.key)) return;
+    document.body.classList.add('hide-cursor');
+  }, true);
+  document.addEventListener('mousemove', (ev) => {
+    const p = [ev.screenX, ev.screenY];
+    if (mouseAt && document.body.classList.contains('hide-cursor')
+        && Math.abs(p[0] - mouseAt[0]) + Math.abs(p[1] - mouseAt[1]) > 3) {
+      document.body.classList.remove('hide-cursor');
+    }
+    mouseAt = p;
+  }, true);
+  document.addEventListener('mousedown', () => document.body.classList.remove('hide-cursor'), true);
+
   // ------------------------------------------------------------ 키보드
   document.addEventListener('keydown', (ev) => {
     if (!$('dialog').hidden) {
