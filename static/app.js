@@ -1627,7 +1627,7 @@
         if (side === 'right') { ipFor = undefined; scheduleInfoPanel(); }
       }
     } else if (appEl.classList.contains(cls)) {
-      hideTimer[side] = setTimeout(() => appEl.classList.remove(cls), 250);   // 살짝 벗어난 경우는 바로 닫지 않음
+      hideTimer[side] = setTimeout(() => appEl.classList.remove(cls), 60);    // 아주 잠깐만 기다렸다가 숨김
     }
   }
   document.addEventListener('mousemove', (e) => {
@@ -1638,12 +1638,12 @@
     if (menuOverlay()) {
       const leftW = document.querySelector('.sidebar').offsetWidth || 300;
       if (x <= EDGE && y >= top) reveal('left', true);
-      else if (appEl.classList.contains('reveal-left')) reveal('left', x <= leftW + 16 && y >= top - 8);
+      else if (appEl.classList.contains('reveal-left')) reveal('left', x <= leftW + 4 && y >= top - 8);
     }
     if (infoOverlay()) {
       const rightW = $('infopanel').offsetWidth || 300;
       if (x >= w - 1 - EDGE && y >= top) reveal('right', true);
-      else if (appEl.classList.contains('reveal-right')) reveal('right', x >= w - rightW - 16 && y >= top - 8);
+      else if (appEl.classList.contains('reveal-right')) reveal('right', x >= w - rightW - 4 && y >= top - 8);
     }
   }, { passive: true });
   // 마우스가 창 밖으로 나가면 닫기
