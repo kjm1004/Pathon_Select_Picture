@@ -308,7 +308,8 @@ def test_videos_listed_after_photos(client):
 
 def test_editor_launch(client, tmp_path, monkeypatch):
     launched = []
-    monkeypatch.setattr(client.mod.subprocess, "Popen", lambda cmd, **kw: launched.append(cmd))
+    cwds = []
+    monkeypatch.setattr(client.mod.subprocess, "Popen", lambda cmd, **kw: (launched.append(cmd), cwds.append(kw.get("cwd"))))
     monkeypatch.setattr(client.mod, "SETTINGS_FILE", tmp_path / "settings.json")
     # 서브모듈이 없는 환경(GitHub 빌드 등)에서도 시험할 수 있게 가짜 video_editor/main.py 를 둔다
     src = tmp_path / "src"
@@ -324,6 +325,7 @@ def test_editor_launch(client, tmp_path, monkeypatch):
     vid.write_bytes(b"\x00" * 10)
     client.post("/api/editor", json={"path": str(vid)}, headers=tok)
     assert launched[-1][-1] == str(vid)
+    assert cwds[-1] == str(client.day)          # 작업 폴더 = 동영상이 있는 폴더 (편집기 파일 창 시작 위치)
     assert client.post("/api/editor", json={"path": str(client.day / "IMG_0.JPG")}, headers=tok).status_code == 400
     # 설정에 직접 지정한 프로그램이 우선
     exe = tmp_path / "MyEditor.exe"

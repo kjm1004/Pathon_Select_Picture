@@ -1272,8 +1272,14 @@ def api_editor():
             abort(400, "동영상 파일이 아닙니다")
         cmd = cmd + [str(p)]
     flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0   # 별도 프로세스로 (사진정리를 닫아도 계속 실행)
+    # 작업 폴더: 동영상을 넘기면 그 동영상의 폴더, 아니면 영상편집 프로그램 폴더
+    # (예전에는 파이썬 실행 파일 폴더(.venv\\Scripts)가 되어 편집기의 파일 고르기 창이 그곳에서 열렸음)
+    if raw:
+        workdir = Path(cmd[-1]).parent
+    else:
+        workdir = Path(cmd[-1] if cmd[-1].endswith(".py") else cmd[0]).parent
     try:
-        subprocess.Popen(cmd, cwd=str(Path(cmd[-1] if cmd[-1].endswith(".py") else cmd[0]).parent),
+        subprocess.Popen(cmd, cwd=str(workdir),
                          creationflags=flags, close_fds=True,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as ex:
