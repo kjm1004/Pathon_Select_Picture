@@ -392,6 +392,11 @@ button.frow:hover { background: #1F242A; }
 /* 키보드로 작업하는 동안 마우스 포인터 숨기기 */
 .hide-cursor, .hide-cursor * { cursor: none !important; }
 
+/* 인덱스에서 여러 장 선택 */
+.ix.picked .th { outline: 2px solid #8AB4FF; outline-offset: 1px; }
+.ix.picked .th::after { content: ""; position: absolute; inset: 0; background: rgba(76,141,255,.28); pointer-events: none; z-index: 2; }
+.ix.picked .num { color: #fff; background: #2F5DB3; }
+
 @media (max-width: 700px) {
   .body { flex-wrap: wrap; overflow: auto; }
   .sidebar { flex: 1 1 100%; width: auto; }

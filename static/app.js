@@ -21,6 +21,8 @@
     rfilter: 'all',        // 별점 필터: 'all' 또는 0~5
     defaultStars: 3,       // 별점을 매기지 않은 사진의 별점
     collection: null,      // 별점 모아 보기 중이면 별 개수
+    sel: new Set(),        // 인덱스에서 여러 장 선택 (사진 경로). 비어 있으면 현재 사진 한 장
+    selAnchor: null,       // Shift 연속 선택의 기준 사진 번호
     fs: false,             // 전체 화면 보기
     marks: new Map(),      // folderPath -> Set(photoPath)
     info: new Map(),
@@ -237,6 +239,41 @@
   }
 
   // 같은 별을 다시 누르면 지운다(기본 별점으로)
+  // ------------------------------------------------------------ 여러 장 선택
+  const selected = () => (state.sel.size > 1 ? state.photos.filter((p) => state.sel.has(p.path)) : [state.photos[state.focus]].filter(Boolean));
+  function clearSel() { state.sel.clear(); state.selAnchor = null; }
+  function selectRange(a, b) {
+    state.sel.clear();
+    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) if (state.photos[i]) state.sel.add(state.photos[i].path);
+  }
+  // 선택한 사진 모두 삭제 표시 (이미 모두 표시돼 있으면 모두 해제)
+  function toggleMarkSelected() {
+    const list = selected();
+    if (list.length <= 1) { toggleMark(state.focus); return; }
+    const m = marksOf(state.folder);
+    const all = list.every((p) => m.has(p.path));
+    list.forEach((p) => (all ? m.delete(p.path) : m.add(p.path)));
+    renderAll(); renderTree();
+    toast(`${list.length}장 ${all ? '삭제 표시 해제' : '삭제 표시'}`);
+  }
+  // 선택한 사진 모두 같은 별점
+  async function setRatingSelected(stars) {
+    const list = selected();
+    if (list.length <= 1) { const p = state.photos[state.focus]; if (p && (stars === 0 || p.rating !== stars)) setRating(state.focus, stars); return; }
+    const before = list.map((p) => p.rating);
+    list.forEach((p) => { p.rating = stars; });
+    renderAll();
+    try {
+      await post('/api/rating', { paths: list.map((p) => p.path), stars });
+      refreshSummary();
+      toast(`${list.length}장 ${stars ? '★'.repeat(stars) : '별점 지움'}`);
+    } catch (e) {
+      list.forEach((p, i) => { p.rating = before[i]; });
+      renderAll();
+      toast('별점을 저장하지 못했습니다: ' + e.message, true);
+    }
+  }
+
   async function setRating(i, stars) {
     const p = state.photos[i];
     if (!p) return;
@@ -315,6 +352,7 @@
 
   // 필터를 적용해 화면 목록을 다시 만든다. keepPath 사진이 남아 있으면 그 사진을 계속 보여 준다.
   function applyFilter(keepPath = null, fallbackIndex = 0) {
+    clearSel();
     const f = state.rfilter;
     state.photos = f === 'all' ? state.allPhotos.slice() : state.allPhotos.filter((p) => effStars(p) === +f);
     let i = keepPath ? state.photos.findIndex((p) => p.path === keepPath) : -1;
@@ -936,6 +974,13 @@
   const ctx = $('ctx');
   function showCtx(x, y, p) {
     const items = [];
+    const many = state.sel.size > 1 && state.sel.has(p.path) ? selected() : null;
+    if (many) {
+      const vids = many.filter((q) => q.video);
+      items.push(['mark-on', `선택한 ${many.length}장 삭제 표시`], ['mark-off', `선택한 ${many.length}장 삭제 표시 해제`]);
+      if (vids.length) items.push(['compress-sel', `선택한 동영상 ${vids.length}개 용량 줄이기…`]);
+      items.push(['hr']);
+    }
     if (p.video) items.push(['compress', '동영상 용량 줄이기…'], ['editor', '영상편집에서 열기'], ['hr']);
     items.push(['reveal', '탐색기에서 보기'], ['open', p.video ? '기본 동영상 프로그램으로 열기' : '기본 프로그램으로 열기']);
     ctx.innerHTML = items.map(([k, t]) => (k === 'hr' ? '<hr>' : `<button role="menuitem" data-k="${k}">${esc(t)}</button>`)).join('');
@@ -947,6 +992,12 @@
       if (!b) return;
       ctx.hidden = true;
       if (b.dataset.k === 'compress') openCompress(p);
+      if (b.dataset.k === 'compress-sel') { const vids = many.filter((q) => q.video); openCompress(vids[0], vids); }
+      if (b.dataset.k === 'mark-on' || b.dataset.k === 'mark-off') {
+        const m = marksOf(state.folder);
+        many.forEach((q) => (b.dataset.k === 'mark-on' ? m.add(q.path) : m.delete(q.path)));
+        renderAll(); renderTree();
+      }
       if (b.dataset.k === 'editor') { setFocus(state.photos.indexOf(p), false); openEditor(); }
       if (b.dataset.k === 'reveal') revealInExplorer(p.path, p.name);
       if (b.dataset.k === 'open') post('/api/open', { path: p.path }).catch((e) => toast(e.message, true));
@@ -989,8 +1040,11 @@
     g.querySelectorAll('button').forEach((b) => { b.setAttribute('role', 'radio'); b.addEventListener('click', () => { cpOpt[g.dataset.key] = b.dataset.v; cpPaint(); }); });
   });
   const fmtDurLong = (s) => (s ? fmtDur(s) : '?');
-  async function openCompress(p) {
+  let cpList = null;   // 선택한 동영상 여러 개 (있으면 '이 동영상' 대신)
+  async function openCompress(p, list = null) {
     cpTarget = p;
+    cpList = list && list.length > 1 ? list : null;
+    $('cp-one').textContent = cpList ? `선택한 동영상 ${cpList.length}개` : '이 동영상';
     if (state.settings.compress) Object.assign(cpOpt, state.settings.compress, { scope: 'one' });
     const vids = state.allPhotos.filter((x) => x.video);
     $('cp-folder').textContent = `이 폴더의 동영상 모두 (${vids.length}개 · ${fmtSize(vids.reduce((a, x) => a + x.size, 0))})`;
@@ -1023,7 +1077,8 @@
   $('cp-start').addEventListener('click', async () => {
     cpOpt.gpu = $('cp-gpu').checked;
     cpOpt.replace = $('cp-replace').checked;
-    const paths = cpOpt.scope === 'folder' ? state.allPhotos.filter((x) => x.video).map((x) => x.path) : [cpTarget.path];
+    const paths = cpOpt.scope === 'folder' ? state.allPhotos.filter((x) => x.video).map((x) => x.path)
+      : cpList ? cpList.map((x) => x.path) : [cpTarget.path];
     if (cpOpt.replace && !window.confirm(`변환이 끝나면 원본 ${paths.length}개를 휴지통으로 옮기고 새 파일로 바꿉니다.\n계속할까요?`)) return;
     const { scope, ...save } = cpOpt;
     state.settings.compress = save;
@@ -1260,7 +1315,23 @@
 
   $('strip').addEventListener('click', (ev) => {
     const b = ev.target.closest('.ix');
-    if (b) { setFocus(+b.dataset.i); centerMain(); }
+    if (!b) return;
+    const i = +b.dataset.i;
+    if (ev.shiftKey) {                              // 연속 선택
+      const a = state.selAnchor ?? state.focus;
+      state.selAnchor = a;
+      selectRange(a, i);
+    } else if (ev.ctrlKey || ev.metaKey) {          // 한 장씩 넣기/빼기
+      if (!state.sel.size && state.photos[state.focus]) state.sel.add(state.photos[state.focus].path);
+      const path = state.photos[i].path;
+      if (state.sel.has(path)) state.sel.delete(path); else state.sel.add(path);
+      state.selAnchor = i;
+    } else {
+      clearSel();
+      state.selAnchor = i;
+    }
+    setFocus(i);
+    if (!ev.shiftKey && !ev.ctrlKey && !ev.metaKey) centerMain();
   });
 
   // 메인 창에서 현재 사진을 가운데로 (나란히: 가운데 칸, 바둑판: 가운데 줄)
@@ -1457,6 +1528,24 @@
     $('nup-wrap').hidden = state.view !== 'multi';
     $('gsize-wrap').hidden = state.view !== 'grid';
     $('grid').className = `grid gs-${state.gridSize}`;
+  }
+
+  // ↑ ↓ 키: 보이는 장 수 (한 장 ↔ 나란히 2·3·4·5·6·8장)
+  const COUNT_STEPS = [1, 2, 3, 4, 5, 6, 8];
+  function changeCount(dir) {
+    const cur = state.view === 'single' ? 1 : state.nup;
+    let i = COUNT_STEPS.indexOf(cur);
+    if (i < 0) i = COUNT_STEPS.findIndex((x) => x > cur) - 1;
+    const ni = Math.max(0, Math.min(COUNT_STEPS.length - 1, i + dir));
+    const n = COUNT_STEPS[ni];
+    if (n === cur) return;
+    if (n === 1) { setView('single'); toast('한 장 보기'); return; }
+    state.nup = n;
+    $('nup').value = String(n);
+    saveSettings({ nup: n });
+    if (state.view !== 'multi') setView('multi');
+    sizeMulti(); multiKinetic.stop(); renderAll(); ensureMultiVisible(true);
+    toast(`나란히 ${n}장`);
   }
 
   function setView(v) {
@@ -1839,7 +1928,8 @@
     $('multi').hidden = !has || state.view !== 'multi';
     $('grid').hidden = !has || state.view !== 'grid';
     $('fs-btn').disabled = !has;
-    $('pos').textContent = has && state.view !== 'grid' ? `${state.focus + 1} / ${state.photos.length}` : '';
+    $('pos').textContent = (has && state.view !== 'grid' ? `${state.focus + 1} / ${state.photos.length}` : '')
+      + (state.sel.size > 1 ? ` · 선택 ${state.sel.size}장` : '');
 
     state.photos.forEach((p, i) => {
       const mk = m.has(p.path);
@@ -1847,6 +1937,7 @@
       const s = state.stripEls[i];
       if (s) {
         s.classList.toggle('marked', mk); s.classList.toggle('focus', f); s.setAttribute('aria-current', f ? 'true' : 'false');
+        s.classList.toggle('picked', state.sel.size > 1 && state.sel.has(p.path));
         const rb = s.querySelector('.rb');
         const txt = p.rating ? `★${p.rating}` : '';
         if (rb.textContent !== txt) { rb.textContent = txt; rb.hidden = !txt; }
@@ -2020,8 +2111,20 @@
     if (t.matches('select') && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) t.blur();
     else if (t.matches('input[type=text], select, textarea')) return;
     const step = state.view === 'multi' ? state.nup : 1;
-    if (ev.key === 'ArrowRight') { ev.preventDefault(); setFocus(state.focus + 1); }
+    if ((ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') && ev.shiftKey && !state.fs) {   // 키보드로 연속 선택
+      ev.preventDefault();
+      if (state.selAnchor === null) state.selAnchor = state.focus;
+      const ni = Math.max(0, Math.min(state.photos.length - 1, state.focus + (ev.key === 'ArrowRight' ? 1 : -1)));
+      selectRange(state.selAnchor, ni);
+      setFocus(ni);
+    }
+    else if (ev.key === 'ArrowRight') { ev.preventDefault(); setFocus(state.focus + 1); }
     else if (ev.key === 'ArrowLeft') { ev.preventDefault(); setFocus(state.focus - 1); }
+    else if ((ev.key === 'ArrowUp' || ev.key === 'ArrowDown') && !state.fs && state.view !== 'grid') {   // 장 수 늘리기/줄이기
+      ev.preventDefault();
+      changeCount(ev.key === 'ArrowUp' ? 1 : -1);
+    }
+    else if (ev.key === 'Escape' && !state.fs && state.sel.size) { ev.preventDefault(); clearSel(); renderAll(); }
     else if (ev.key === 'PageDown') { ev.preventDefault(); setFocus(state.focus + step); }
     else if (ev.key === 'PageUp') { ev.preventDefault(); setFocus(state.focus - step); }
     else if (ev.key === 'Home') { ev.preventDefault(); setFocus(0); }
@@ -2034,18 +2137,14 @@
     else if (ev.key === 'F5') { ev.preventDefault(); refreshAll(); }   // 화면 전체 새로고침 대신 폴더 정보만
     else if (/^[0-5]$/.test(ev.key) && !ev.ctrlKey && !ev.altKey) {
       ev.preventDefault();
-      if (state.photos.length) {
-        const p = state.photos[state.focus];
-        const n = +ev.key;
-        if (n === 0 || p.rating !== n) setRating(state.focus, n);   // 키는 다시 눌러도 지우지 않음
-      }
+      if (state.photos.length) setRatingSelected(+ev.key);   // 여러 장 선택했으면 모두 (키는 다시 눌러도 지우지 않음)
     }
     else if (ev.key === '+' || ev.key === '=' || ev.key === '-' || ev.key === 'z' || ev.key === 'Z' || ev.key === 'ㅋ') {
       const zm = state.fs ? fsZoom : state.view === 'single' ? bigZoom : null;
       if (zm) { ev.preventDefault(); (ev.key === '-') ? zm.zoomOut() : (ev.key === '+' || ev.key === '=') ? zm.zoomIn() : zm.reset(); }
     }
     else if (ev.key === 'f' || ev.key === 'F' || ev.key === 'ㄹ' || (ev.key === 'Enter' && !t.matches('button'))) { ev.preventDefault(); state.fs ? closeFs() : openFs(); }
-    else if (ev.key === ' ' || ev.key === 'Delete') { ev.preventDefault(); toggleMark(state.focus); }
+    else if (ev.key === ' ' || ev.key === 'Delete') { ev.preventDefault(); toggleMarkSelected(); }
   });
 
   // 별도 프로그램 창이면 "폴더 열기"가 윈도우 폴더 선택 창을 띄운다
